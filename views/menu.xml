@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_sys_tango_report"
+              name="Sumas y saldos con plan Tango"
+              parent="account.menu_finance_reports"
+              action="action_sys_tango_wizard"
+              groups="account.group_account_readonly"
+              sequence="90"/>
+
+    <menuitem id="menu_tango_config"
+              name="Plan Tango"
+              parent="account.menu_finance_configuration"
+              groups="account.group_account_manager"
+              sequence="90"/>
+    <menuitem id="menu_tango_account"
+              parent="menu_tango_config"
+              action="action_tango_account"
+              sequence="10"/>
+    <menuitem id="menu_tango_mapping"
+              parent="menu_tango_config"
+              action="action_tango_mapping"
+              sequence="20"/>
+    <menuitem id="menu_tango_import"
+              parent="menu_tango_config"
+              action="action_tango_import_wizard"
+              sequence="30"/>
+</odoo>

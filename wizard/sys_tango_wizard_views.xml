@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_sys_tango_wizard_form" model="ir.ui.view">
+        <field name="name">yaguven.sys.tango.wizard.form</field>
+        <field name="model">yaguven.sys.tango.wizard</field>
+        <field name="arch" type="xml">
+            <form>
+                <group>
+                    <group>
+                        <field name="company_id"/>
+                        <field name="date_from"/>
+                        <field name="date_to"/>
+                    </group>
+                    <group>
+                        <field name="show_zero"/>
+                        <field name="show_detail"/>
+                    </group>
+                </group>
+                <footer>
+                    <button name="action_show" string="Ver en pantalla" type="object" class="btn-primary"/>
+                    <button name="action_export_xlsx" string="Exportar xlsx" type="object" class="btn-secondary"/>
+                    <button string="Cancelar" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_sys_tango_wizard" model="ir.actions.act_window">
+        <field name="name">Sumas y saldos con plan Tango</field>
+        <field name="res_model">yaguven.sys.tango.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+
+    <record id="view_sys_tango_line_list" model="ir.ui.view">
+        <field name="name">yaguven.sys.tango.line.list</field>
+        <field name="model">yaguven.sys.tango.line</field>
+        <field name="arch" type="xml">
+            <list create="0" edit="0" delete="0"
+                  decoration-bf="kind in ('tango', 'total', 'unmapped')"
+                  decoration-it="kind == 'detail'"
+                  decoration-muted="kind == 'detail'"
+                  decoration-warning="kind == 'unmapped'">
+                <field name="kind" column_invisible="1"/>
+                <field name="currency_id" column_invisible="1"/>
+                <field name="code"/>
+                <field name="name"/>
+                <field name="debit"/>
+                <field name="credit"/>
+                <field name="balance_debit"/>
+                <field name="balance_credit"/>
+                <field name="asset"/>
+                <field name="liability"/>
+                <field name="loss"/>
+                <field name="profit"/>
+            </list>
+        </field>
+    </record>
+</odoo>

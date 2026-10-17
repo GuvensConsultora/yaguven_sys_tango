@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Plan Tango -->
+    <record id="view_tango_account_list" model="ir.ui.view">
+        <field name="name">yaguven.tango.account.list</field>
+        <field name="model">yaguven.tango.account</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="sequence" widget="handle"/>
+                <field name="code"/>
+                <field name="name"/>
+                <field name="nature"/>
+                <field name="mapping_count"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_tango_account_form" model="ir.ui.view">
+        <field name="name">yaguven.tango.account.form</field>
+        <field name="model">yaguven.tango.account</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="code"/>
+                            <field name="name"/>
+                            <field name="nature"/>
+                        </group>
+                        <group>
+                            <field name="sequence"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="active" invisible="1"/>
+                        </group>
+                    </group>
+                    <separator string="Cuentas Odoo que la componen"/>
+                    <field name="mapping_ids" context="{'default_company_id': company_id}">
+                        <list editable="bottom">
+                            <field name="company_id" column_invisible="1"/>
+                            <field name="account_id"/>
+                            <field name="note"/>
+                        </list>
+                    </field>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_tango_account_search" model="ir.ui.view">
+        <field name="name">yaguven.tango.account.search</field>
+        <field name="model">yaguven.tango.account</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="code"/>
+                <field name="name"/>
+                <filter name="patrimonial" string="Patrimoniales" domain="[('nature', '=', 'patrimonial')]"/>
+                <filter name="resultado" string="De resultado" domain="[('nature', '=', 'resultado')]"/>
+                <separator/>
+                <filter name="sin_equivalencia" string="Sin cuentas Odoo" domain="[('mapping_ids', '=', False)]"/>
+                <separator/>
+                <filter name="archived" string="Archivadas" domain="[('active', '=', False)]"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_tango_account" model="ir.actions.act_window">
+        <field name="name">Plan de cuentas Tango</field>
+        <field name="res_model">yaguven.tango.account</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_tango_account_search"/>
+    </record>
+
+    <!-- Equivalencias -->
+    <record id="view_tango_mapping_list" model="ir.ui.view">
+        <field name="name">yaguven.tango.mapping.list</field>
+        <field name="model">yaguven.tango.mapping</field>
+        <field name="arch" type="xml">
+            <list editable="bottom">
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="account_id"/>
+                <field name="tango_account_id"/>
+                <field name="note"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_tango_mapping_search" model="ir.ui.view">
+        <field name="name">yaguven.tango.mapping.search</field>
+        <field name="model">yaguven.tango.mapping</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="account_id"/>
+                <field name="tango_account_id"/>
+                <group>
+                    <filter name="group_tango" string="Cuenta Tango" context="{'group_by': 'tango_account_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_tango_mapping" model="ir.actions.act_window">
+        <field name="name">Equivalencias Odoo → Tango</field>
+        <field name="res_model">yaguven.tango.mapping</field>
+        <field name="view_mode">list</field>
+        <field name="search_view_id" ref="view_tango_mapping_search"/>
+    </record>
+</odoo>
