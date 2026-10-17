@@ -34,7 +34,6 @@ class SysTangoWizard(models.TransientModel):
     )
     date_from = fields.Date(
         string="Desde",
-        required=True,
         help="Inicio del ejercicio. Lo anterior entra como saldo inicial de cada "
         "cuenta patrimonial; los resultados de ejercicios anteriores van a "
         "Resultados no asignados, igual que en el balance nativo de Odoo.",
@@ -64,17 +63,21 @@ class SysTangoWizard(models.TransientModel):
                 self.date_to
             )["date_from"]
 
-    @api.model
-    def default_get(self, fields_list):
-        res = super().default_get(fields_list)
-        company = self.env["res.company"].browse(
-            res.get("company_id") or self.env.company.id
-        )
-        date_to = fields.Date.to_date(res.get("date_to")) or fields.Date.context_today(self)
-        res.setdefault(
-            "date_from", company.compute_fiscalyear_dates(date_to)["date_from"]
-        )
-        return res
+    @api.model_create_multi
+    def create(self, vals_list):
+        # Sin «Desde» explícito: inicio del ejercicio de la fecha «Hasta» pedida.
+        for vals in vals_list:
+            if not vals.get("date_from"):
+                company = self.env["res.company"].browse(
+                    vals.get("company_id") or self.env.company.id
+                )
+                date_to = fields.Date.to_date(
+                    vals.get("date_to")
+                ) or fields.Date.context_today(self)
+                vals["date_from"] = company.compute_fiscalyear_dates(date_to)[
+                    "date_from"
+                ]
+        return super().create(vals_list)
 
     # ------------------------------------------------------------------ cálculo
 
