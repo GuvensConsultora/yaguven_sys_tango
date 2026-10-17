@@ -1,6 +1,6 @@
 {
     'name': 'Sumas y Saldos con plan Tango - Yagüven',
-    'version': '19.0.1.0.1',
+    'version': '19.0.1.1.0',
     'category': 'Accounting',
     'summary': 'Balance de sumas y saldos agrupado por el plan de cuentas de Tango',
     'description': """
@@ -12,6 +12,9 @@ contador sigan siendo comparables después de la migración.
 - Plan Tango por compañía, importado desde el xlsx de sumas y saldos de Tango.
 - Equivalencias cuenta Odoo -> cuenta Tango en tabla propia (no agrega campos
   a account.account).
+- Equivalencias por diario (opcionales): una cuenta Odoo que en Tango estaría
+  repartida (p. ej. cobros pendientes de acreditación → tarjeta o banco) se
+  reparte según el diario del movimiento; lo que no tiene regla va a la general.
 - Renglón «Sin equivalencia» para que el total cuadre siempre con el SyS de Odoo.
 
 Hereda sólo de nativos: lee account.move.line como datasource.

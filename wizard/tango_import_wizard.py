@@ -159,7 +159,15 @@ class TangoImportWizard(models.TransientModel):
         c_odoo = self._col(names, "codigo odoo")
         c_tango = self._col(names, "codigo tango")
         c_note = self._col(names, "criterio")
+        # Columna opcional: diario por código o por nombre; vacío = general.
+        c_journal = self._col(names, "diario")
         company = self.company_id
+        journals = {}
+        for journal in self.env["account.journal"].search(
+            [("company_id", "=", company.id)]
+        ):
+            journals[_norm(journal.code)] = journal
+            journals[_norm(journal.name)] = journal
         Account = self.env["account.account"].with_company(company)
         accounts = {
             a.code: a
@@ -173,7 +181,7 @@ class TangoImportWizard(models.TransientModel):
         }
         Mapping = self.env["yaguven.tango.mapping"]
         current = {
-            m.account_id.id: m
+            (m.account_id.id, m.journal_id.id): m
             for m in Mapping.search([("company_id", "=", company.id)])
         }
         created = updated = 0
@@ -191,15 +199,29 @@ class TangoImportWizard(models.TransientModel):
                     + ("cuenta Odoo inexistente" if not account else "cuenta Tango inexistente")
                 )
                 continue
+            journal = self.env["account.journal"]
+            journal_txt = row[c_journal] if c_journal is not None else None
+            if journal_txt not in (None, ""):
+                journal = journals.get(_norm(_code(journal_txt)))
+                if not journal:
+                    missing.append(
+                        f"{code_odoo} -> {code_tango}: diario «{journal_txt}» inexistente"
+                    )
+                    continue
             vals = {"tango_account_id": tango_acc.id}
             if c_note is not None and row[c_note]:
                 vals["note"] = str(row[c_note]).strip()
-            if account.id in current:
-                current[account.id].write(vals)
+            key = (account.id, journal.id)
+            if key in current:
+                current[key].write(vals)
                 updated += 1
             else:
-                vals.update(company_id=company.id, account_id=account.id)
-                current[account.id] = Mapping.create(vals)
+                vals.update(
+                    company_id=company.id,
+                    account_id=account.id,
+                    journal_id=journal.id,
+                )
+                current[key] = Mapping.create(vals)
                 created += 1
         lines = [
             f"Compañía: {company.name}",

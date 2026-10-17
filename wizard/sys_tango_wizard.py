@@ -81,10 +81,14 @@ class SysTangoWizard(models.TransientModel):
 
     # ------------------------------------------------------------------ cálculo
 
-    def _account_amounts(self):
-        """{account: [debit, credit]} al estilo del SyS: el saldo inicial neto
-        entra como un débito o un crédito, más los movimientos del período."""
+    def _account_amounts(self, split_accounts):
+        """{(account, journal): [debit, credit]} al estilo del SyS: el saldo
+        inicial neto entra como un débito o un crédito, más los movimientos del
+        período. Sólo las cuentas de split_accounts (las que tienen equivalencia
+        por diario) se separan por diario; el resto va con journal vacío, así
+        el neteo del saldo inicial queda igual que por cuenta."""
         self.ensure_one()
+        no_journal = self.env["account.journal"]
         if self.date_from > self.date_to:
             raise UserError("La fecha Desde es posterior a la fecha Hasta.")
         AML = self.env["account.move.line"].with_company(self.company_id)
@@ -94,24 +98,29 @@ class SysTangoWizard(models.TransientModel):
         ]
         amounts = {}
 
-        def add(account, debit, credit):
-            acc = amounts.setdefault(account, [0.0, 0.0])
+        def add(account, journal, debit, credit):
+            key = (account, journal if account in split_accounts else no_journal)
+            acc = amounts.setdefault(key, [0.0, 0.0])
             acc[0] += debit
             acc[1] += credit
 
         # Saldo inicial: patrimoniales con toda su historia; resultados de
         # ejercicios anteriores acumulados en Resultados no asignados.
+        # Se netea por clave (cuenta, o cuenta+diario si se reparte).
         prior_pnl = 0.0
-        for account, debit, credit in AML._read_group(
+        initial = {}
+        for account, journal, debit, credit in AML._read_group(
             base + [("date", "<", self.date_from)],
-            ["account_id"],
+            ["account_id", "journal_id"],
             ["debit:sum", "credit:sum"],
         ):
-            net = debit - credit
-            if account.include_initial_balance:
-                add(account, max(net, 0.0), max(-net, 0.0))
-            else:
-                prior_pnl += net
+            if not account.include_initial_balance:
+                prior_pnl += debit - credit
+                continue
+            key = (account, journal if account in split_accounts else no_journal)
+            initial[key] = initial.get(key, 0.0) + debit - credit
+        for (account, journal), net in initial.items():
+            add(account, journal, max(net, 0.0), max(-net, 0.0))
         if not self.company_id.currency_id.is_zero(prior_pnl):
             unaffected = self.env["account.account"].with_company(
                 self.company_id
@@ -127,17 +136,17 @@ class SysTangoWizard(models.TransientModel):
                     "Hay resultados de ejercicios anteriores y la compañía no "
                     "tiene cuenta de Resultados no asignados."
                 )
-            add(unaffected, max(prior_pnl, 0.0), max(-prior_pnl, 0.0))
+            add(unaffected, no_journal, max(prior_pnl, 0.0), max(-prior_pnl, 0.0))
 
-        for account, debit, credit in AML._read_group(
+        for account, journal, debit, credit in AML._read_group(
             base + [
                 ("date", ">=", self.date_from),
                 ("date", "<=", self.date_to),
             ],
-            ["account_id"],
+            ["account_id", "journal_id"],
             ["debit:sum", "credit:sum"],
         ):
-            add(account, debit, credit)
+            add(account, journal, debit, credit)
         return amounts
 
     @staticmethod
@@ -168,11 +177,15 @@ class SysTangoWizard(models.TransientModel):
         self.ensure_one()
         company = self.company_id
         rounding = company.currency_id
-        amounts = self._account_amounts()
         mappings = self.env["yaguven.tango.mapping"].search(
             [("company_id", "=", company.id)]
         )
-        tango_of = {m.account_id: m.tango_account_id for m in mappings}
+        tango_of = {
+            (m.account_id, m.journal_id): m.tango_account_id for m in mappings
+        }
+        split_accounts = {m.account_id for m in mappings if m.journal_id}
+        amounts = self._account_amounts(split_accounts)
+        no_journal = self.env["account.journal"]
         tango_accounts = self.env["yaguven.tango.account"].search(
             [("company_id", "=", company.id)]
         )
@@ -181,23 +194,38 @@ class SysTangoWizard(models.TransientModel):
                 f"La compañía {company.name} no tiene cargado el plan Tango."
             )
 
-        by_tango = {t: [] for t in tango_accounts}
-        unmapped = []
-        for account, (debit, credit) in amounts.items():
+        # Cada importe va a la equivalencia de su diario y, si no hay, a la
+        # general de la cuenta. Las partes de una misma cuenta que caen en la
+        # equivalencia general se juntan en un solo renglón de detalle.
+        by_tango = {t: {} for t in tango_accounts}
+        unmapped = {}
+        for (account, journal), (debit, credit) in amounts.items():
             if rounding.is_zero(debit) and rounding.is_zero(credit):
                 continue
-            tango = tango_of.get(account)
-            if tango and tango in by_tango:
-                by_tango[tango].append((account, debit, credit))
-            else:
-                unmapped.append((account, debit, credit))
+            tango = journal and tango_of.get((account, journal))
+            part_key = (account, journal) if tango else (account, no_journal)
+            if not tango:
+                tango = tango_of.get((account, no_journal))
+            target = by_tango[tango] if tango in by_tango else unmapped
+            part = target.setdefault(part_key, [0.0, 0.0])
+            part[0] += debit
+            part[1] += credit
+
+        def detail_label(account, journal):
+            name = account.name
+            if journal:
+                name = f"{name} — {journal.name}"
+            return account.code, name
 
         rows = []
         totals = dict.fromkeys(AMOUNT_KEYS, 0.0)
         for tango in tango_accounts:
-            parts = sorted(by_tango[tango], key=lambda p: p[0].code or "")
-            debit = sum(p[1] for p in parts)
-            credit = sum(p[2] for p in parts)
+            parts = sorted(
+                ((acc, jou, d, c) for (acc, jou), (d, c) in by_tango[tango].items()),
+                key=lambda p: (p[0].code or "", p[1].name or ""),
+            )
+            debit = sum(p[2] for p in parts)
+            credit = sum(p[3] for p in parts)
             if not parts and not self.show_zero:
                 continue
             row = self._amount_row(debit, credit, tango.nature)
@@ -205,15 +233,19 @@ class SysTangoWizard(models.TransientModel):
             for key in AMOUNT_KEYS:
                 totals[key] += row[key]
             if self.show_detail:
-                for account, p_debit, p_credit in parts:
+                for account, journal, p_debit, p_credit in parts:
+                    code, name = detail_label(account, journal)
                     rows.append(dict(
                         self._amount_row(p_debit, p_credit, tango.nature),
                         kind="detail",
-                        code=account.code,
-                        name=account.name,
+                        code=code,
+                        name=name,
                     ))
 
-        for account, debit, credit in sorted(unmapped, key=lambda p: p[0].code or ""):
+        # Sin equivalencia siempre se agrupa por cuenta (journal vacío).
+        for (account, _journal), (debit, credit) in sorted(
+            unmapped.items(), key=lambda p: p[0][0].code or ""
+        ):
             nature = (
                 "patrimonial"
                 if account.internal_group in PATRIMONIAL_GROUPS

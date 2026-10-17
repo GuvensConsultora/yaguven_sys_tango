@@ -39,6 +39,7 @@
                         <list editable="bottom">
                             <field name="company_id" column_invisible="1"/>
                             <field name="account_id"/>
+                            <field name="journal_id" optional="show"/>
                             <field name="note"/>
                         </list>
                     </field>
@@ -79,6 +80,7 @@
             <list editable="bottom">
                 <field name="company_id" groups="base.group_multi_company"/>
                 <field name="account_id"/>
+                <field name="journal_id"/>
                 <field name="tango_account_id"/>
                 <field name="note"/>
             </list>
@@ -92,8 +94,12 @@
             <search>
                 <field name="account_id"/>
                 <field name="tango_account_id"/>
+                <field name="journal_id"/>
+                <filter name="por_diario" string="Por diario" domain="[('journal_id', '!=', False)]"/>
+                <filter name="general" string="Generales" domain="[('journal_id', '=', False)]"/>
                 <group>
                     <filter name="group_tango" string="Cuenta Tango" context="{'group_by': 'tango_account_id'}"/>
+                    <filter name="group_journal" string="Diario" context="{'group_by': 'journal_id'}"/>
                 </group>
             </search>
         </field>

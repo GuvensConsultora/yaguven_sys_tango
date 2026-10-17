@@ -17,7 +17,7 @@
                     descripción y orden.
                 </div>
                 <div invisible="state == 'done' or import_type != 'mapping'" class="text-muted">
-                    Columnas: «Código Odoo», «Código Tango» y, opcional, «Criterio».
+                    Columnas: «Código Odoo», «Código Tango» y, opcionales, «Diario» (código o nombre; vacío = equivalencia general de la cuenta) y «Criterio».
                 </div>
                 <field name="state" invisible="1"/>
                 <field name="result" invisible="state != 'done'" nolabel="1"/>
