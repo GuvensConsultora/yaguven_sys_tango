@@ -1,6 +1,6 @@
 {
     'name': 'Sumas y Saldos con plan Tango - Yagüven',
-    'version': '19.0.1.2.1',
+    'version': '19.0.1.2.2',
     'category': 'Accounting',
     'summary': 'Balance de sumas y saldos agrupado por el plan de cuentas de Tango',
     'description': """

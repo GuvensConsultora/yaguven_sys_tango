@@ -312,6 +312,11 @@ class SysTangoWizard(models.TransientModel):
         rows.append(dict(totals, kind="total", code="", name="TOTALES"))
         return rows
 
+    @staticmethod
+    def _fmt(amount):
+        """Importe con el formato de la plaza: 1.234.567,89."""
+        return f"{amount:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
     def _check_totals(self, rows, exclusion=None):
         """Controles de cuadre del reporte, como texto para mostrar."""
         total = next(r for r in rows if r["kind"] == "total")
@@ -330,7 +335,7 @@ class SysTangoWizard(models.TransientModel):
         ]
         unmapped = sum(1 for r in rows if r["kind"] == "unmapped")
         lines = [
-            f"{name}: {'OK' if currency.is_zero(diff) else f'DIFERENCIA {diff:,.2f}'}"
+            f"{name}: {'OK' if currency.is_zero(diff) else f'DIFERENCIA {self._fmt(diff)}'}"
             for name, diff in checks
         ]
         lines.append(
@@ -347,12 +352,12 @@ class SysTangoWizard(models.TransientModel):
             )
             lines.append(
                 f"Asientos que las tocan y quedaron afuera: "
-                f"{exclusion['moves']:,} asientos · {exclusion['count']:,} líneas del "
-                f"período · débitos {exclusion['debit']:,.2f}"
+                f"{exclusion['moves']} asientos · {exclusion['count']} líneas del "
+                f"período · débitos {self._fmt(exclusion['debit'])}"
             )
             if exclusion["prior_count"]:
                 lines.append(
-                    f"De esos asientos hay además {exclusion['prior_count']:,} líneas "
+                    f"De esos asientos hay además {exclusion['prior_count']} líneas "
                     "anteriores al «Desde», que tampoco entran al saldo inicial."
                 )
             lines.append(
