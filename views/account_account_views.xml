@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Anclajes verificados contra las vistas nativas de Odoo 19 (account.account):
+         el formulario y la lista traen «active»; la búsqueda, el filtro «inactiveacc». -->
+
+    <record id="view_account_form_sys_tango" model="ir.ui.view">
+        <field name="name">account.account.form.sys.tango</field>
+        <field name="model">account.account</field>
+        <field name="inherit_id" ref="account.view_account_form"/>
+        <field name="arch" type="xml">
+            <field name="active" position="after">
+                <field name="sys_tango_excluded" widget="boolean_toggle"/>
+            </field>
+        </field>
+    </record>
+
+    <record id="view_account_list_sys_tango" model="ir.ui.view">
+        <field name="name">account.account.list.sys.tango</field>
+        <field name="model">account.account</field>
+        <field name="inherit_id" ref="account.view_account_list"/>
+        <field name="arch" type="xml">
+            <field name="active" position="after">
+                <field name="sys_tango_excluded" optional="hide" widget="boolean_toggle"/>
+            </field>
+        </field>
+    </record>
+
+    <record id="view_account_search_sys_tango" model="ir.ui.view">
+        <field name="name">account.account.search.sys.tango</field>
+        <field name="model">account.account</field>
+        <field name="inherit_id" ref="account.view_account_search"/>
+        <field name="arch" type="xml">
+            <filter name="inactiveacc" position="after">
+                <filter name="sys_tango_excluded"
+                        string="Excluidas del SyS Tango"
+                        domain="[('sys_tango_excluded', '=', True)]"/>
+            </filter>
+        </field>
+    </record>
+
+</odoo>

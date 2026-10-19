@@ -81,7 +81,36 @@ class SysTangoWizard(models.TransientModel):
 
     # ------------------------------------------------------------------ cálculo
 
-    def _account_amounts(self, split_accounts):
+    def _excluded_moves(self):
+        """Asientos que no entran al reporte: los que tocan una cuenta tildada
+        «Excluir del SyS Tango», con todas sus contrapartidas. Devuelve también
+        cuánto quedó afuera, para informarlo al pie."""
+        self.ensure_one()
+        accounts = self.env["account.account"].search([
+            ("company_ids", "in", self.company_id.id),
+            ("sys_tango_excluded", "=", True),
+        ])
+        info = {"accounts": accounts, "move_ids": [], "count": 0, "debit": 0.0}
+        if not accounts:
+            return info
+        AML = self.env["account.move.line"]
+        base = [
+            ("company_id", "=", self.company_id.id),
+            ("parent_state", "=", "posted"),
+            ("date", "<=", self.date_to),
+        ]
+        # Los posteriores a «Hasta» no entran al reporte: no hace falta excluirlos.
+        move_ids = AML.search(base + [("account_id", "in", accounts.ids)]).move_id.ids
+        if not move_ids:
+            return info
+        groups = AML._read_group(
+            base + [("move_id", "in", move_ids)], [], ["debit:sum", "__count"]
+        )
+        debit, count = groups[0] if groups else (0.0, 0)
+        info.update(move_ids=move_ids, count=count, debit=debit, moves=len(move_ids))
+        return info
+
+    def _account_amounts(self, split_accounts, excluded_move_ids=()):
         """{(account, journal): [debit, credit]} al estilo del SyS: el saldo
         inicial neto entra como un débito o un crédito, más los movimientos del
         período. Sólo las cuentas de split_accounts (las que tienen equivalencia
@@ -96,6 +125,8 @@ class SysTangoWizard(models.TransientModel):
             ("company_id", "=", self.company_id.id),
             ("parent_state", "=", "posted"),
         ]
+        if excluded_move_ids:
+            base.append(("move_id", "not in", list(excluded_move_ids)))
         amounts = {}
 
         def add(account, journal, debit, credit):
@@ -168,13 +199,14 @@ class SysTangoWizard(models.TransientModel):
             row["loss"], row["profit"] = row["balance_debit"], row["balance_credit"]
         return row
 
-    def _compute_rows(self):
+    def _compute_rows(self, exclusion=None):
         """Renglones del reporte, en el orden del plan Tango.
 
         kind: 'tango' cuenta Tango · 'detail' cuenta Odoo que la compone ·
         'unmapped' cuenta Odoo sin equivalencia · 'total'.
         """
         self.ensure_one()
+        exclusion = exclusion if exclusion is not None else self._excluded_moves()
         company = self.company_id
         rounding = company.currency_id
         mappings = self.env["yaguven.tango.mapping"].search(
@@ -184,7 +216,7 @@ class SysTangoWizard(models.TransientModel):
             (m.account_id, m.journal_id): m.tango_account_id for m in mappings
         }
         split_accounts = {m.account_id for m in mappings if m.journal_id}
-        amounts = self._account_amounts(split_accounts)
+        amounts = self._account_amounts(split_accounts, exclusion["move_ids"])
         no_journal = self.env["account.journal"]
         tango_accounts = self.env["yaguven.tango.account"].search(
             [("company_id", "=", company.id)]
@@ -264,9 +296,9 @@ class SysTangoWizard(models.TransientModel):
         rows.append(dict(totals, kind="total", code="", name="TOTALES"))
         return rows
 
-    def _check_totals(self, rows):
+    def _check_totals(self, rows, exclusion=None):
         """Controles de cuadre del reporte, como texto para mostrar."""
-        total = rows[-1]
+        total = next(r for r in rows if r["kind"] == "total")
         currency = self.company_id.currency_id
         checks = [
             ("Débitos = Créditos", total["debit"] - total["credit"]),
@@ -289,13 +321,39 @@ class SysTangoWizard(models.TransientModel):
             "Cuentas Odoo sin equivalencia Tango: "
             + (f"{unmapped} (ver renglones «SIN EQUIVALENCIA»)" if unmapped else "ninguna")
         )
+        exclusion = exclusion if exclusion is not None else self._excluded_moves()
+        if exclusion["accounts"]:
+            codes = ", ".join(
+                f"{a.code} {a.name}" for a in exclusion["accounts"][:6]
+            ) + (" …" if len(exclusion["accounts"]) > 6 else "")
+            lines.append(
+                f"Cuentas excluidas del SyS Tango: {len(exclusion['accounts'])} ({codes})"
+            )
+            lines.append(
+                f"Asientos que las tocan y quedaron afuera: "
+                f"{exclusion.get('moves', 0):,} asientos · {exclusion['count']:,} líneas · "
+                f"débitos {exclusion['debit']:,.2f}"
+            )
+            lines.append(
+                "Por esas exclusiones este listado NO coincide con el balance de "
+                "sumas y saldos de Odoo: se quitaron los asientos completos, "
+                "incluidas las contrapartidas en otras cuentas."
+            )
+        else:
+            lines.append("Cuentas excluidas del SyS Tango: ninguna")
         return lines
 
     # ------------------------------------------------------------------ salidas
 
     def action_show(self):
         self.ensure_one()
-        rows = self._compute_rows()
+        exclusion = self._excluded_moves()
+        rows = self._compute_rows(exclusion)
+        # En pantalla los controles van como renglones, debajo de TOTALES.
+        rows += [
+            dict(dict.fromkeys(AMOUNT_KEYS, 0.0), kind="info", code="", name=line)
+            for line in self._check_totals(rows, exclusion)
+        ]
         self.line_ids.unlink()
         self.env["yaguven.sys.tango.line"].create([
             dict(
@@ -321,7 +379,8 @@ class SysTangoWizard(models.TransientModel):
 
     def action_export_xlsx(self):
         self.ensure_one()
-        rows = self._compute_rows()
+        exclusion = self._excluded_moves()
+        rows = self._compute_rows(exclusion)
 
         import openpyxl
         from openpyxl.styles import Alignment, Font, PatternFill
@@ -354,6 +413,8 @@ class SysTangoWizard(models.TransientModel):
             cell.alignment = Alignment(horizontal="center", wrap_text=True)
 
         for r in rows:
+            if r["kind"] == "info":  # en el xlsx van abajo, en «Controles»
+                continue
             code = r["code"]
             if r["kind"] == "detail":
                 code = f"    {code}"
@@ -373,7 +434,7 @@ class SysTangoWizard(models.TransientModel):
         ws.append([])
         ws.append(["Controles"])
         ws.cell(ws.max_row, 1).font = bold
-        for line in self._check_totals(rows):
+        for line in self._check_totals(rows, exclusion):
             ws.append([line])
 
         ws.column_dimensions["A"].width = 18
@@ -417,6 +478,7 @@ class SysTangoLine(models.TransientModel):
             ("detail", "Cuenta Odoo"),
             ("unmapped", "Sin equivalencia"),
             ("total", "Totales"),
+            ("info", "Control"),
         ],
         string="Renglón",
     )
