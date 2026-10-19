@@ -90,7 +90,10 @@ class SysTangoWizard(models.TransientModel):
             ("company_ids", "in", self.company_id.id),
             ("sys_tango_excluded", "=", True),
         ])
-        info = {"accounts": accounts, "move_ids": [], "count": 0, "debit": 0.0}
+        info = {
+            "accounts": accounts, "move_ids": [], "moves": 0,
+            "count": 0, "debit": 0.0, "prior_count": 0,
+        }
         if not accounts:
             return info
         AML = self.env["account.move.line"]
@@ -103,11 +106,24 @@ class SysTangoWizard(models.TransientModel):
         move_ids = AML.search(base + [("account_id", "in", accounts.ids)]).move_id.ids
         if not move_ids:
             return info
+        info["move_ids"], info["moves"] = move_ids, len(move_ids)
+        # El importe se informa sobre la misma base que la columna «Débitos
+        # acumulados»: sólo las líneas del período. Las anteriores al «Desde»
+        # entran al listado neteadas en el saldo inicial, no como débitos, así
+        # que se cuentan aparte y no se suman a ese importe.
         groups = AML._read_group(
-            base + [("move_id", "in", move_ids)], [], ["debit:sum", "__count"]
+            base + [
+                ("move_id", "in", move_ids),
+                ("date", ">=", self.date_from),
+            ],
+            [],
+            ["debit:sum", "__count"],
         )
         debit, count = groups[0] if groups else (0.0, 0)
-        info.update(move_ids=move_ids, count=count, debit=debit, moves=len(move_ids))
+        prior = AML.search_count(
+            base + [("move_id", "in", move_ids), ("date", "<", self.date_from)]
+        )
+        info.update(count=count, debit=debit, prior_count=prior)
         return info
 
     def _account_amounts(self, split_accounts, excluded_move_ids=()):
@@ -331,9 +347,14 @@ class SysTangoWizard(models.TransientModel):
             )
             lines.append(
                 f"Asientos que las tocan y quedaron afuera: "
-                f"{exclusion.get('moves', 0):,} asientos · {exclusion['count']:,} líneas · "
-                f"débitos {exclusion['debit']:,.2f}"
+                f"{exclusion['moves']:,} asientos · {exclusion['count']:,} líneas del "
+                f"período · débitos {exclusion['debit']:,.2f}"
             )
+            if exclusion["prior_count"]:
+                lines.append(
+                    f"De esos asientos hay además {exclusion['prior_count']:,} líneas "
+                    "anteriores al «Desde», que tampoco entran al saldo inicial."
+                )
             lines.append(
                 "Por esas exclusiones este listado NO coincide con el balance de "
                 "sumas y saldos de Odoo: se quitaron los asientos completos, "
