@@ -49,8 +49,9 @@ class SysTangoWizard(models.TransientModel):
     )
     show_zero = fields.Boolean(
         string="Incluir cuentas sin saldo",
-        default=True,
-        help="Lista todas las cuentas del plan Tango, como el SyS de Tango.",
+        help="Lista todas las cuentas del plan Tango, como el SyS de Tango. "
+             "Apagado —que es como viene— el reporte muestra sólo los renglones "
+             "con movimiento, que es lo que se usa para armar el balance.",
     )
     line_ids = fields.One2many(
         "yaguven.sys.tango.line", "wizard_id", string="Renglones"
