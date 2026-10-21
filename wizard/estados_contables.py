@@ -184,7 +184,8 @@ class SysTangoWizardEstados(models.TransientModel):
             return -bruto if seccion in PASIVO or seccion == "patrimonio_neto" else bruto
 
         for seccion, titulo in SECCIONES_ESP:
-            rubros = Rubro.search([("section", "=", seccion)])
+            rubros = Rubro.search([("section", "=", seccion),
+                                   ("company_id", "=", self.company_id.id)])
             visibles = [
                 r for r in rubros
                 if any(abs(importe(seccion, r, c)) >= 0.005
@@ -249,7 +250,8 @@ class SysTangoWizardEstados(models.TransientModel):
         """Renglones del estado de resultados, con los subtotales del modelo."""
         Rubro = self.env["yaguven.rubro"]
         filas, acumulado, total = [], 0.0, 0.0
-        for rubro in Rubro.search([("section", "=", "resultado")]):
+        for rubro in Rubro.search([("section", "=", "resultado"),
+                                   ("company_id", "=", self.company_id.id)]):
             d = datos["er"].get(rubro)
             valor = -(sum(d["partidas"].values()) + sum(d["regul"].values())) if d else 0.0
             if abs(valor) >= 0.005:
@@ -293,7 +295,9 @@ class SysTangoWizardEstados(models.TransientModel):
             ("financiero", "Financieros"),
         ]
         rubros = {
-            f: Rubro.search([("section", "=", "resultado"), ("expense_function", "=", f)])
+            f: Rubro.search([("section", "=", "resultado"),
+                             ("expense_function", "=", f),
+                             ("company_id", "=", self.company_id.id)])
             for f, _t in funciones
         }
         aperturas, totales = {}, {f: 0.0 for f, _t in funciones}

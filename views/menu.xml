@@ -37,4 +37,9 @@
               parent="menu_rubro_config"
               action="action_rubro_mapping"
               sequence="20"/>
+    <menuitem id="menu_rubro_cargar"
+              parent="menu_rubro_config"
+              action="action_cargar_rubros"
+              name="Cargar rubros de la RT 59"
+              sequence="5"/>
 </odoo>

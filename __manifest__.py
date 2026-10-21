@@ -1,6 +1,6 @@
 {
     'name': 'Sumas y Saldos con plan Tango - Yagüven',
-    'version': '19.0.2.0.0',
+    'version': '19.0.2.1.0',
     'category': 'Accounting',
     'summary': 'Balance de sumas y saldos agrupado por el plan de cuentas de Tango',
     'description': """
@@ -30,7 +30,7 @@ Hereda sólo de nativos: lee account.move.line como datasource.
     'data': [
         'security/ir.model.access.csv',
         'security/ir_rule.xml',
-        'data/rubros_rt59.xml',
+        'data/acciones.xml',
         'views/tango_account_views.xml',
         'views/account_account_views.xml',
         'views/rubro_views.xml',
@@ -38,5 +38,6 @@ Hereda sólo de nativos: lee account.move.line como datasource.
         'wizard/sys_tango_wizard_views.xml',
         'views/menu.xml',
     ],
+    'post_init_hook': 'post_init_hook',
     'installable': True,
 }

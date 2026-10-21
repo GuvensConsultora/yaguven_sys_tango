@@ -1,6 +1,8 @@
 from odoo import api, fields, models
 from odoo.exceptions import ValidationError
 
+from .rubros_catalogo import CATALOGO_RT59
+
 SECCIONES = [
     ("activo_corriente", "Activo corriente"),
     ("activo_no_corriente", "Activo no corriente"),
@@ -16,9 +18,9 @@ class Rubro(models.Model):
 
     Los rubros son los de la RT 59 (texto ordenado de la RT 54, Norma Unificada
     Argentina de Contabilidad), según el modelo de estados contables del Informe
-    CENCyA N° 27. Es catálogo normativo: viene precargado con el módulo y es el
-    mismo para todas las compañías. Lo que cambia por cliente es la asociación
-    con el plan de cuentas, que vive en yaguven.rubro.mapping.
+    CENCyA N° 27. El catálogo se carga por compañía —así cada una puede ajustar
+    el orden, el nombre o dar de baja un rubro que no usa sin tocar a las demás—
+    y la asociación con el plan de cuentas vive en yaguven.rubro.mapping.
     """
 
     _name = "yaguven.rubro"
@@ -26,6 +28,13 @@ class Rubro(models.Model):
     _order = "sequence, code"
     _rec_names_search = ["code", "name"]
 
+    company_id = fields.Many2one(
+        "res.company",
+        string="Compañía",
+        required=True,
+        default=lambda self: self.env.company,
+        index=True,
+    )
     code = fields.Char(string="Código", required=True, index=True)
     name = fields.Char(string="Rubro", required=True)
     section = fields.Selection(
@@ -64,7 +73,11 @@ class Rubro(models.Model):
     active = fields.Boolean(string="Activo", default=True)
 
     _sql_constraints = [
-        ("code_uniq", "unique(code)", "Ya existe un rubro con ese código."),
+        (
+            "code_company_uniq",
+            "unique(company_id, code)",
+            "Ya existe un rubro con ese código en esta compañía.",
+        ),
     ]
 
     @api.depends("mapping_ids")
@@ -84,6 +97,52 @@ class Rubro(models.Model):
     def es_patrimonial(self):
         self.ensure_one()
         return self.section != "resultado"
+
+    @api.model
+    def cargar_catalogo(self, companies=None):
+        """Carga los rubros de la RT 59 en las compañías indicadas.
+
+        Crea sólo los que faltan, comparando por (compañía, código): se puede
+        volver a correr sin duplicar nada y sin pisar lo que alguien haya
+        ajustado a mano.
+        """
+        companies = companies or self.env["res.company"].search([])
+        existentes = {
+            (r.company_id.id, r.code)
+            for r in self.with_context(active_test=False).search(
+                [("company_id", "in", companies.ids)]
+            )
+        }
+        nuevos = [
+            {
+                "company_id": company.id,
+                "code": code,
+                "name": name,
+                "section": section,
+                "sequence": sequence,
+                "expense_function": expense_function,
+            }
+            for company in companies
+            for code, name, section, sequence, expense_function in CATALOGO_RT59
+            if (company.id, code) not in existentes
+        ]
+        return self.create(nuevos) if nuevos else self.browse()
+
+    @api.model
+    def action_cargar_catalogo(self):
+        """Acción del menú: carga el catálogo en la compañía activa."""
+        creados = self.cargar_catalogo(self.env.company)
+        mensaje = (
+            f"Se cargaron {len(creados)} rubros en {self.env.company.display_name}."
+            if creados
+            else f"{self.env.company.display_name} ya tiene el catálogo completo."
+        )
+        return {
+            "type": "ir.actions.client",
+            "tag": "display_notification",
+            "params": {"title": "Rubros de los estados contables",
+                       "message": mensaje, "type": "info", "sticky": False},
+        }
 
 
 class RubroMapping(models.Model):
