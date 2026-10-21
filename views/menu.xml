@@ -24,4 +24,17 @@
               parent="menu_tango_config"
               action="action_tango_import_wizard"
               sequence="30"/>
+    <menuitem id="menu_rubro_config"
+              name="Rubros de los estados contables"
+              parent="account.menu_finance_configuration"
+              groups="account.group_account_manager"
+              sequence="91"/>
+    <menuitem id="menu_rubro"
+              parent="menu_rubro_config"
+              action="action_rubro"
+              sequence="10"/>
+    <menuitem id="menu_rubro_mapping"
+              parent="menu_rubro_config"
+              action="action_rubro_mapping"
+              sequence="20"/>
 </odoo>

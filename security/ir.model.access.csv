@@ -6,3 +6,7 @@ access_tango_mapping_manager,yaguven.tango.mapping manager,model_yaguven_tango_m
 access_tango_import_wizard,yaguven.tango.import.wizard,model_yaguven_tango_import_wizard,account.group_account_manager,1,1,1,1
 access_sys_tango_wizard,yaguven.sys.tango.wizard,model_yaguven_sys_tango_wizard,account.group_account_readonly,1,1,1,1
 access_sys_tango_line,yaguven.sys.tango.line,model_yaguven_sys_tango_line,account.group_account_readonly,1,1,1,1
+access_rubro_readonly,yaguven.rubro readonly,model_yaguven_rubro,account.group_account_readonly,1,0,0,0
+access_rubro_manager,yaguven.rubro manager,model_yaguven_rubro,account.group_account_manager,1,1,1,1
+access_rubro_mapping_readonly,yaguven.rubro.mapping readonly,model_yaguven_rubro_mapping,account.group_account_readonly,1,0,0,0
+access_rubro_mapping_manager,yaguven.rubro.mapping manager,model_yaguven_rubro_mapping,account.group_account_manager,1,1,1,1

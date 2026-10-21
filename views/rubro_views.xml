@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Rubros de exposición -->
+    <record id="view_rubro_list" model="ir.ui.view">
+        <field name="name">yaguven.rubro.list</field>
+        <field name="model">yaguven.rubro</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="sequence" widget="handle"/>
+                <field name="code"/>
+                <field name="name"/>
+                <field name="section"/>
+                <field name="expense_function" optional="show"/>
+                <field name="mapping_count"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_rubro_form" model="ir.ui.view">
+        <field name="name">yaguven.rubro.form</field>
+        <field name="model">yaguven.rubro</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="code"/>
+                            <field name="name"/>
+                            <field name="section"/>
+                        </group>
+                        <group>
+                            <field name="sequence"/>
+                            <field name="expense_function"/>
+                            <field name="active" invisible="1"/>
+                        </group>
+                    </group>
+                    <separator string="Cuentas y grupos que lo componen"/>
+                    <field name="mapping_ids">
+                        <list editable="bottom">
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="group_id"/>
+                            <field name="account_id"/>
+                            <field name="condition"/>
+                            <field name="rubro_alt_id"/>
+                            <field name="is_regularizing"/>
+                            <field name="note"/>
+                        </list>
+                    </field>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_rubro_search" model="ir.ui.view">
+        <field name="name">yaguven.rubro.search</field>
+        <field name="model">yaguven.rubro</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="code"/>
+                <field name="name"/>
+                <filter name="patrimonial" string="Situación patrimonial" domain="[('section', '!=', 'resultado')]"/>
+                <filter name="resultado" string="Resultados" domain="[('section', '=', 'resultado')]"/>
+                <separator/>
+                <filter name="sin_cuentas" string="Sin cuentas asociadas" domain="[('mapping_ids', '=', False)]"/>
+                <separator/>
+                <filter name="archived" string="Archivados" domain="[('active', '=', False)]"/>
+                <group>
+                    <filter name="group_section" string="Sección" context="{'group_by': 'section'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_rubro" model="ir.actions.act_window">
+        <field name="name">Rubros de los estados contables</field>
+        <field name="res_model">yaguven.rubro</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_rubro_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Rubros de exposición según la RT 59</p>
+            <p>
+                Son los del modelo de estados contables del Informe CENCyA N° 27.
+                Vienen con el módulo: lo que se configura por compañía es qué cuenta
+                o qué grupo del plan va a cada rubro.
+            </p>
+        </field>
+    </record>
+
+    <!-- Equivalencias plan de cuentas → rubro -->
+    <record id="view_rubro_mapping_list" model="ir.ui.view">
+        <field name="name">yaguven.rubro.mapping.list</field>
+        <field name="model">yaguven.rubro.mapping</field>
+        <field name="arch" type="xml">
+            <list editable="bottom">
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="group_id"/>
+                <field name="account_id"/>
+                <field name="rubro_id"/>
+                <field name="condition"/>
+                <field name="rubro_alt_id"/>
+                <field name="is_regularizing"/>
+                <field name="note"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_rubro_mapping_search" model="ir.ui.view">
+        <field name="name">yaguven.rubro.mapping.search</field>
+        <field name="model">yaguven.rubro.mapping</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="account_id"/>
+                <field name="group_id"/>
+                <field name="rubro_id"/>
+                <filter name="por_cuenta" string="Por cuenta" domain="[('account_id', '!=', False)]"/>
+                <filter name="por_grupo" string="Por grupo" domain="[('group_id', '!=', False)]"/>
+                <separator/>
+                <filter name="segun_saldo" string="Dependen del signo del saldo" domain="[('condition', '!=', 'always')]"/>
+                <filter name="regularizadoras" string="Regularizadoras" domain="[('is_regularizing', '=', True)]"/>
+                <group>
+                    <filter name="group_rubro" string="Rubro" context="{'group_by': 'rubro_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_rubro_mapping" model="ir.actions.act_window">
+        <field name="name">Equivalencias plan de cuentas → rubro</field>
+        <field name="res_model">yaguven.rubro.mapping</field>
+        <field name="view_mode">list</field>
+        <field name="search_view_id" ref="view_rubro_mapping_search"/>
+    </record>
+</odoo>

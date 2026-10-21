@@ -14,6 +14,8 @@
                     <group>
                         <field name="show_zero"/>
                         <field name="show_detail"/>
+                        <field name="show_statements"/>
+                        <field name="show_detail_sheets"/>
                     </group>
                 </group>
                 <footer>

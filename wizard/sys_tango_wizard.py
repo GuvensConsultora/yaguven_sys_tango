@@ -406,6 +406,29 @@ class SysTangoWizard(models.TransientModel):
 
     def action_export_xlsx(self):
         self.ensure_one()
+        wb = self._build_workbook()
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        filename = (
+            f"SyS_Tango_{self.company_id.name}_{self.date_to.strftime('%Y%m%d')}.xlsx"
+        ).replace(" ", "_")
+        attachment = self.env["ir.attachment"].create({
+            "name": filename,
+            "type": "binary",
+            "datas": base64.b64encode(buf.read()),
+            "mimetype": "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet",
+        })
+        return {
+            "type": "ir.actions.act_url",
+            "url": f"/web/content/{attachment.id}?download=true",
+            "target": "self",
+        }
+
+    def _build_workbook(self):
+        """El libro del reporte. Se hereda para sumarle solapas."""
+        self.ensure_one()
         exclusion = self._excluded_moves()
         rows = self._compute_rows(exclusion)
 
@@ -470,24 +493,7 @@ class SysTangoWizard(models.TransientModel):
             ws.column_dimensions[letter].width = 18
         ws.freeze_panes = ws.cell(header_row + 1, 3)
 
-        buf = io.BytesIO()
-        wb.save(buf)
-        buf.seek(0)
-        filename = (
-            f"SyS_Tango_{company.name}_{self.date_to.strftime('%Y%m%d')}.xlsx"
-        ).replace(" ", "_")
-        attachment = self.env["ir.attachment"].create({
-            "name": filename,
-            "type": "binary",
-            "datas": base64.b64encode(buf.read()),
-            "mimetype": "application/vnd.openxmlformats-officedocument."
-            "spreadsheetml.sheet",
-        })
-        return {
-            "type": "ir.actions.act_url",
-            "url": f"/web/content/{attachment.id}?download=true",
-            "target": "self",
-        }
+        return wb
 
 
 class SysTangoLine(models.TransientModel):
