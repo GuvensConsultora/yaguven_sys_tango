@@ -143,14 +143,15 @@ class SysTangoWizardEstados(models.TransientModel):
         actual = self._saldos_por_cuenta(self.date_to, excluidos)
         comparativo = self._saldos_por_cuenta(cierre_anterior, excluidos)
 
-        patrimoniales = {}
-        resultados = {}
+        patrimoniales, sin_rubro_pat, resultados = {}, {}, {}
         for saldos, destino in ((actual, "actual"), (comparativo, "comparativo")):
             pat = {a: s for a, s in saldos.items()
                    if a.internal_group not in RESULTADO_GROUPS}
             res = {a: s for a, s in saldos.items()
                    if a.internal_group in RESULTADO_GROUPS}
-            patrimoniales[destino] = self._agrupar_por_rubro(pat, por_cuenta, por_grupo)
+            agrupado, sin_rubro = self._agrupar_por_rubro(pat, por_cuenta, por_grupo)
+            patrimoniales[destino] = agrupado
+            sin_rubro_pat[destino] = sin_rubro
             # el resultado acumulado hasta cada fecha, para cerrar el patrimonio
             resultados[destino] = -sum(res.values())
 
@@ -164,6 +165,7 @@ class SysTangoWizardEstados(models.TransientModel):
 
         return {
             "esp": patrimoniales,
+            "esp_sin_rubro": sin_rubro_pat,
             "resultado_acumulado": resultados,
             "er": er_datos,
             "er_sin_rubro": er_sin_rubro,
@@ -237,6 +239,35 @@ class SysTangoWizardEstados(models.TransientModel):
                        else "pasivo" if seccion in PASIVO else "pn")
             for i in (0, 1):
                 totales[destino][i] += subtotal[i]
+
+        sin_rubro = datos.get("esp_sin_rubro") or {}
+        cuentas_sin = sorted(
+            set(sin_rubro.get("actual", {})) | set(sin_rubro.get("comparativo", {})),
+            key=lambda c: c.code or "",
+        )
+        if cuentas_sin:
+            filas.append({"kind": "seccion", "label": "SIN RUBRO ASIGNADO",
+                          "valores": [None, None]})
+            subtotal = [0.0, 0.0]
+            for cuenta in cuentas_sin:
+                vals = [sin_rubro.get("actual", {}).get(cuenta, 0.0),
+                        sin_rubro.get("comparativo", {}).get(cuenta, 0.0)]
+                if all(abs(v) < 0.005 for v in vals):
+                    continue
+                filas.append({"kind": "apertura",
+                              "label": f"{cuenta.code} {cuenta.name}",
+                              "valores": vals})
+                subtotal = [subtotal[i] + vals[i] for i in (0, 1)]
+            filas.append({"kind": "subtotal",
+                          "label": "Total sin rubro asignado (deudor positivo)",
+                          "valores": subtotal})
+            # para que el estado cierre: el neto deudor suma al activo y el
+            # acreedor al pasivo, hasta que se les asigne rubro
+            for i in (0, 1):
+                if subtotal[i] >= 0:
+                    totales["activo"][i] += subtotal[i]
+                else:
+                    totales["pasivo"][i] += -subtotal[i]
 
         filas.append({"kind": "total", "label": "Total del activo",
                       "valores": totales["activo"]})
@@ -341,6 +372,13 @@ class SysTangoWizardEstados(models.TransientModel):
             "Cuentas sin rubro asignado en el estado de resultados: "
             + (f"{len(sin_rubro)} (ver renglón «Sin rubro asignado»)"
                if sin_rubro else "ninguna")
+        )
+        sin_pat = (datos.get("esp_sin_rubro") or {}).get("actual") or {}
+        lineas.append(
+            "Cuentas sin rubro asignado en la situación patrimonial: "
+            + (f"{len(sin_pat)} (" + ", ".join(
+                f"{c.code} {c.name}" for c in list(sin_pat)[:6]) + ")"
+               if sin_pat else "ninguna")
         )
         lineas.append(
             "Comparativo: el estado de situación patrimonial sale de los saldos al "
