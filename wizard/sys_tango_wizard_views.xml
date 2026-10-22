@@ -19,6 +19,7 @@
                         <field name="show_balance_impositivo"/>
                         <field name="show_impositivo"/>
                         <field name="show_impositivo_comparativo"/>
+                        <field name="show_balance_odoo"/>
                     </group>
                 </group>
                 <footer>

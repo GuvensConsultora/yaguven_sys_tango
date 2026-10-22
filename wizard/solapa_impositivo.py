@@ -42,6 +42,14 @@ class SysTangoWizardImpositivo(models.TransientModel):
         "ejercicio anterior (la apertura). Si no hay impositivo cargado, no se "
         "agrega.",
     )
+    show_balance_odoo = fields.Boolean(
+        string="Balance Odoo (formato impositivo)",
+        default=False,
+        help="Agrega una solapa con el balance de Odoo al cierre (a la fecha "
+        "«hasta»), en el mismo formato que el balance impositivo: por sección, "
+        "patrimonio neto sin el resultado y resultado del ejercicio aparte. Sale "
+        "de los asientos; no necesita impositivo cargado.",
+    )
 
     # -------------------------------------------------------------- datos
 
@@ -131,19 +139,73 @@ class SysTangoWizardImpositivo(models.TransientModel):
     # -------------------------------------------------- hoja: balance impositivo
 
     def _hoja_balance_impositivo(self, wb, fecha, impositivo):
+        self._hoja_balance_formato(
+            wb, "Balance impositivo",
+            f"{self.company_id.name} — Balance impositivo al {fecha.strftime('%d/%m/%Y')}",
+            "Cargado en Contabilidad → Configuración → Apertura del balance "
+            "impositivo. No sale de los asientos.",
+            impositivo)
+
+    def _odoo_detallado_por_seccion(self, datos, columna):
+        """El balance de Odoo en el mismo formato que el impositivo: por sección,
+        con los rubros del ESP como detalle (patrimoniales) y los del estado de
+        resultados en la sección «resultado». El patrimonio neto va sin el
+        resultado, que se expone aparte."""
+        self.ensure_one()
+        Rubro = self.env["yaguven.rubro"]
+        out = {}
+        for seccion, _t in SECCIONES_ESP:
+            detalle, total = [], 0.0
+            for rubro in Rubro.search([("section", "=", seccion),
+                                       ("company_id", "=", self.company_id.id)]):
+                d = datos["esp"][columna].get(rubro)
+                if not d:
+                    continue
+                bruto = sum(d["partidas"].values()) + sum(d["regul"].values())
+                valor = -bruto if (seccion in PASIVO or seccion == "patrimonio_neto") else bruto
+                if abs(valor) >= 0.005:
+                    detalle.append((rubro.code, rubro.name, valor, False))
+                    total += valor
+            if detalle:
+                out[seccion] = {"detalle": detalle, "total": round(total, 2)}
+        detalle, total = [], 0.0
+        for rubro in Rubro.search([("section", "=", "resultado"),
+                                   ("company_id", "=", self.company_id.id)]):
+            d = datos["er"].get(rubro)
+            valor = -(sum(d["partidas"].values()) + sum(d["regul"].values())) if d else 0.0
+            if abs(valor) >= 0.005:
+                detalle.append((rubro.code, rubro.name, valor, False))
+                total += valor
+        if detalle:
+            out["resultado"] = {"detalle": detalle, "total": round(total, 2)}
+        return out
+
+    def _hoja_balance_odoo(self, wb):
+        datos = self._datos_estados()
+        data = self._odoo_detallado_por_seccion(datos, "actual")
+        actual = self.date_to.strftime("%d/%m/%Y")
+        self._hoja_balance_formato(
+            wb, "Balance Odoo (formato impositivo)",
+            f"{self.company_id.name} — Balance al {actual} (formato impositivo, datos de Odoo)",
+            "Saldos de Odoo al cierre, en el layout del balance impositivo. "
+            "Patrimonio neto sin el resultado; resultado del ejercicio aparte.",
+            data)
+
+    def _hoja_balance_formato(self, wb, sheet_name, titulo, subtitulo, datos_sec):
         from openpyxl.styles import Alignment
         st = self._estilos_impositivo()
         num = "#,##0.00"
-        ws = wb.create_sheet("Balance impositivo", 0)  # al principio
-        ws.append([f"{self.company_id.name} — Balance impositivo al {fecha.strftime('%d/%m/%Y')}"])
+        ws = wb.create_sheet(sheet_name, 0)  # al principio
+        ws.append([titulo])
         ws.cell(ws.max_row, 1).font = st["big"]
-        ws.append(["Cargado en Contabilidad → Configuración → Apertura del balance "
-                   "impositivo. No sale de los asientos."])
+        ws.append([subtitulo])
         ws.append([])
         ws.append(["Código", "Concepto", "Importe"])
         for cell in ws[ws.max_row]:
             cell.font = st["bold"]
             cell.alignment = Alignment(horizontal="center")
+
+        impositivo = datos_sec
 
         def renglon(codigo, concepto, importe, kind):
             sangria = "    " if kind == "det" else ""
@@ -359,6 +421,8 @@ class SysTangoWizardImpositivo(models.TransientModel):
 
     def _build_workbook(self):
         wb = super()._build_workbook()
+        if self.show_balance_odoo:
+            self._hoja_balance_odoo(wb)
         if not (self.show_impositivo or self.show_balance_impositivo
                 or self.show_impositivo_comparativo):
             return wb
