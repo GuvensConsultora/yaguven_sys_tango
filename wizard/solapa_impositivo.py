@@ -146,53 +146,42 @@ class SysTangoWizardImpositivo(models.TransientModel):
             "impositivo. No sale de los asientos.",
             impositivo)
 
+    # qué sección le toca a una cuenta sin rubro, según su naturaleza
+    _SECCION_POR_NATURALEZA = {
+        "asset": "activo_corriente", "liability": "pasivo_corriente",
+        "equity": "patrimonio_neto", "income": "resultado", "expense": "resultado",
+    }
+
     def _odoo_detallado_por_seccion(self, datos, columna):
-        """El balance de Odoo en el mismo formato que el impositivo: por sección,
-        con los rubros del ESP como detalle (patrimoniales) y los del estado de
-        resultados en la sección «resultado». El patrimonio neto va sin el
-        resultado, que se expone aparte."""
+        """El balance de Odoo en el formato del impositivo, abierto CUENTA POR
+        CUENTA para poder analizarlo (bancos, gastos, patrimonio neto, todo). Cada
+        cuenta con saldo va a la sección de su rubro (o, si no tiene, a la que
+        corresponde por su naturaleza). El activo suma su saldo deudor; el pasivo,
+        el patrimonio neto y el resultado, su saldo acreedor. El patrimonio neto
+        queda sin el resultado del ejercicio, que arma su propia sección."""
         self.ensure_one()
-        Rubro = self.env["yaguven.rubro"]
+        hasta = self.date_to if columna == "actual" else fields.Date.subtract(self.date_from, days=1)
+        exclusion = self._excluded_moves()
+        saldos = self._saldos_por_cuenta(hasta, exclusion["move_ids"])
+        por_cuenta, por_grupo = self._mapeos_por_clave()
         out = {}
-        for seccion, _t in SECCIONES_ESP:
-            signo = -1 if (seccion in PASIVO or seccion == "patrimonio_neto") else 1
-            detalle, total = [], 0.0
-            for rubro in Rubro.search([("section", "=", seccion),
-                                       ("company_id", "=", self.company_id.id)]):
-                d = datos["esp"][columna].get(rubro)
-                if not d:
-                    continue
-                if seccion == "patrimonio_neto":
-                    # el PN se abre por su apertura (grupos/cuentas) para poder
-                    # analizarlo, en vez de dejarlo al nivel del rubro.
-                    for tipo in ("partidas", "regul"):
-                        for clave, v in d[tipo].items():
-                            valor = signo * v
-                            if abs(valor) < 0.005:
-                                continue
-                            cod = (clave.code_prefix_start if clave._name == "account.group"
-                                   else clave.code) or ""
-                            nombre = clave.name + (" (regularizadora)" if tipo == "regul" else "")
-                            detalle.append((cod, nombre, valor, False))
-                            total += valor
-                else:
-                    bruto = sum(d["partidas"].values()) + sum(d["regul"].values())
-                    valor = signo * bruto
-                    if abs(valor) >= 0.005:
-                        detalle.append((rubro.code, rubro.name, valor, False))
-                        total += valor
-            if detalle:
-                out[seccion] = {"detalle": detalle, "total": round(total, 2)}
-        detalle, total = [], 0.0
-        for rubro in Rubro.search([("section", "=", "resultado"),
-                                   ("company_id", "=", self.company_id.id)]):
-            d = datos["er"].get(rubro)
-            valor = -(sum(d["partidas"].values()) + sum(d["regul"].values())) if d else 0.0
-            if abs(valor) >= 0.005:
-                detalle.append((rubro.code, rubro.name, valor, False))
-                total += valor
-        if detalle:
-            out["resultado"] = {"detalle": detalle, "total": round(total, 2)}
+        for account, saldo in saldos.items():
+            if abs(saldo) < 0.005:
+                continue
+            rubro, regulariza, _m = self._rubro_de(account, saldo, por_cuenta, por_grupo)
+            if rubro:
+                seccion = rubro.section
+            else:
+                seccion = self._SECCION_POR_NATURALEZA.get(account.internal_group, "activo_corriente")
+                regulariza = False
+            valor = saldo if seccion in ACTIVO else -saldo
+            nombre = account.name + (" (regularizadora)" if regulariza else "")
+            d = out.setdefault(seccion, {"detalle": [], "total": 0.0})
+            d["detalle"].append((account.code or "", nombre, round(valor, 2), False))
+            d["total"] += valor
+        for seccion in out:
+            out[seccion]["detalle"].sort(key=lambda x: x[0])
+            out[seccion]["total"] = round(out[seccion]["total"], 2)
         return out
 
     def _hoja_balance_odoo(self, wb):
