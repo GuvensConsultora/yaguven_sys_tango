@@ -155,17 +155,32 @@ class SysTangoWizardImpositivo(models.TransientModel):
         Rubro = self.env["yaguven.rubro"]
         out = {}
         for seccion, _t in SECCIONES_ESP:
+            signo = -1 if (seccion in PASIVO or seccion == "patrimonio_neto") else 1
             detalle, total = [], 0.0
             for rubro in Rubro.search([("section", "=", seccion),
                                        ("company_id", "=", self.company_id.id)]):
                 d = datos["esp"][columna].get(rubro)
                 if not d:
                     continue
-                bruto = sum(d["partidas"].values()) + sum(d["regul"].values())
-                valor = -bruto if (seccion in PASIVO or seccion == "patrimonio_neto") else bruto
-                if abs(valor) >= 0.005:
-                    detalle.append((rubro.code, rubro.name, valor, False))
-                    total += valor
+                if seccion == "patrimonio_neto":
+                    # el PN se abre por su apertura (grupos/cuentas) para poder
+                    # analizarlo, en vez de dejarlo al nivel del rubro.
+                    for tipo in ("partidas", "regul"):
+                        for clave, v in d[tipo].items():
+                            valor = signo * v
+                            if abs(valor) < 0.005:
+                                continue
+                            cod = (clave.code_prefix_start if clave._name == "account.group"
+                                   else clave.code) or ""
+                            nombre = clave.name + (" (regularizadora)" if tipo == "regul" else "")
+                            detalle.append((cod, nombre, valor, False))
+                            total += valor
+                else:
+                    bruto = sum(d["partidas"].values()) + sum(d["regul"].values())
+                    valor = signo * bruto
+                    if abs(valor) >= 0.005:
+                        detalle.append((rubro.code, rubro.name, valor, False))
+                        total += valor
             if detalle:
                 out[seccion] = {"detalle": detalle, "total": round(total, 2)}
         detalle, total = [], 0.0
@@ -185,7 +200,7 @@ class SysTangoWizardImpositivo(models.TransientModel):
         data = self._odoo_detallado_por_seccion(datos, "actual")
         actual = self.date_to.strftime("%d/%m/%Y")
         self._hoja_balance_formato(
-            wb, "Balance Odoo (formato impositivo)",
+            wb, "Balance Odoo (impositivo)",
             f"{self.company_id.name} — Balance al {actual} (formato impositivo, datos de Odoo)",
             "Saldos de Odoo al cierre, en el layout del balance impositivo. "
             "Patrimonio neto sin el resultado; resultado del ejercicio aparte.",
