@@ -37,6 +37,11 @@
               parent="menu_rubro_config"
               action="action_rubro_mapping"
               sequence="20"/>
+    <menuitem id="menu_apertura_impositivo"
+              parent="menu_rubro_config"
+              action="action_apertura_impositivo"
+              name="Apertura del balance impositivo"
+              sequence="30"/>
     <menuitem id="menu_rubro_cargar"
               parent="menu_rubro_config"
               action="action_cargar_rubros"

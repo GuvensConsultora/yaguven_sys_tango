@@ -10,3 +10,5 @@ access_rubro_readonly,yaguven.rubro readonly,model_yaguven_rubro,account.group_a
 access_rubro_manager,yaguven.rubro manager,model_yaguven_rubro,account.group_account_manager,1,1,1,1
 access_rubro_mapping_readonly,yaguven.rubro.mapping readonly,model_yaguven_rubro_mapping,account.group_account_readonly,1,0,0,0
 access_rubro_mapping_manager,yaguven.rubro.mapping manager,model_yaguven_rubro_mapping,account.group_account_manager,1,1,1,1
+access_apertura_impositivo_readonly,yaguven.apertura.impositivo readonly,model_yaguven_apertura_impositivo,account.group_account_readonly,1,0,0,0
+access_apertura_impositivo_manager,yaguven.apertura.impositivo manager,model_yaguven_apertura_impositivo,account.group_account_manager,1,1,1,1

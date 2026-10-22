@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_apertura_impositivo_list" model="ir.ui.view">
+        <field name="name">yaguven.apertura.impositivo.list</field>
+        <field name="model">yaguven.apertura.impositivo</field>
+        <field name="arch" type="xml">
+            <list editable="bottom" default_order="company_id, fecha, sequence, id">
+                <field name="sequence" widget="handle"/>
+                <field name="fecha"/>
+                <field name="section"/>
+                <field name="concepto"/>
+                <field name="importe"/>
+                <field name="es_subtotal"/>
+                <field name="note" optional="hide"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="currency_id" column_invisible="1"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_apertura_impositivo_form" model="ir.ui.view">
+        <field name="name">yaguven.apertura.impositivo.form</field>
+        <field name="model">yaguven.apertura.impositivo</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="fecha"/>
+                            <field name="section"/>
+                            <field name="concepto"/>
+                        </group>
+                        <group>
+                            <field name="importe"/>
+                            <field name="es_subtotal"/>
+                            <field name="sequence"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="currency_id" invisible="1"/>
+                        </group>
+                    </group>
+                    <field name="note" placeholder="Fundamento opcional…"/>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_apertura_impositivo_search" model="ir.ui.view">
+        <field name="name">yaguven.apertura.impositivo.search</field>
+        <field name="model">yaguven.apertura.impositivo</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="concepto"/>
+                <field name="fecha"/>
+                <filter name="subtotales" string="Subtotales" domain="[('es_subtotal', '=', True)]"/>
+                <filter name="detalle" string="Detalle" domain="[('es_subtotal', '=', False)]"/>
+                <group>
+                    <filter name="group_section" string="Sección" context="{'group_by': 'section'}"/>
+                    <filter name="group_fecha" string="Fecha" context="{'group_by': 'fecha'}"/>
+                    <filter name="group_company" string="Compañía" context="{'group_by': 'company_id'}" groups="base.group_multi_company"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_apertura_impositivo" model="ir.actions.act_window">
+        <field name="name">Apertura del balance impositivo</field>
+        <field name="res_model">yaguven.apertura.impositivo</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_apertura_impositivo_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Cargá acá el balance impositivo</p>
+            <p>
+                Es la otra vista del mismo cierre (la arma el contador) y no sale de
+                los asientos. La solapa «Contable vs impositivo» del reporte de sumas
+                y saldos enfrenta estos importes con los rubros del estado de
+                situación patrimonial.
+            </p>
+        </field>
+    </record>
+</odoo>

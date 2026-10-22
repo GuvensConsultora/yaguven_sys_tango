@@ -16,6 +16,7 @@
                         <field name="show_detail"/>
                         <field name="show_statements"/>
                         <field name="show_detail_sheets"/>
+                        <field name="show_impositivo"/>
                     </group>
                 </group>
                 <footer>
