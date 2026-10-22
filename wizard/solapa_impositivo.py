@@ -1,12 +1,15 @@
-"""Solapa «Contable vs impositivo»: enfrenta el balance contable (legalizado,
-que sale de los asientos) con el balance impositivo (que carga el contador en
-yaguven.apertura.impositivo) a la fecha de apertura del ejercicio.
+"""Solapas del balance impositivo.
 
-Son dos fuentes del mismo cierre y no coinciden. La solapa muestra el detalle
-del impositivo línea por línea, el subtotal de cada sección contra el total
-contable de esa sección, y la conciliación de la diferencia (la del activo tiene
-que ser igual a la del pasivo más la del patrimonio neto). No cambia ningún
-asiento: es un papel de trabajo.
+El balance impositivo es otra fuente del mismo cierre (lo arma el contador) y no
+coincide con el contable: se carga en yaguven.apertura.impositivo y no sale de
+los asientos. Este archivo agrega dos solapas opcionales al export del SyS:
+
+- «Balance impositivo»: sólo el impositivo, línea por línea, como la foto. Va al
+  principio del archivo.
+- «Contable vs impositivo»: enfrenta, por sección, el contable (de los asientos)
+  con el impositivo, y concilia la diferencia (la del activo tiene que ser igual
+  a la del pasivo más la del patrimonio neto). Ninguna cambia asientos: son
+  papeles de trabajo.
 """
 
 from odoo import fields, models
@@ -17,22 +20,28 @@ from .estados_contables import ACTIVO, PASIVO, SECCIONES_ESP
 class SysTangoWizardImpositivo(models.TransientModel):
     _inherit = "yaguven.sys.tango.wizard"
 
-    show_impositivo = fields.Boolean(
-        string="Contable vs impositivo",
+    show_balance_impositivo = fields.Boolean(
+        string="Balance impositivo",
         default=False,
-        help="Agrega una solapa que compara el balance contable con el "
+        help="Agrega al principio del archivo una solapa con el balance "
         "impositivo cargado en Contabilidad → Configuración → Apertura del "
         "balance impositivo, a la fecha de cierre anterior (la apertura del "
         "ejercicio). Si no hay impositivo cargado para esa fecha, no se agrega.",
+    )
+    show_impositivo = fields.Boolean(
+        string="Contable vs impositivo",
+        default=False,
+        help="Agrega una solapa que compara, por sección, el balance contable "
+        "con el impositivo, y concilia la diferencia.",
     )
 
     # -------------------------------------------------------------- datos
 
     def _impositivo_por_seccion(self, fecha):
-        """{seccion: {'detalle': [(concepto, importe)], 'total': importe}}.
+        """{seccion: {'detalle': [(concepto, importe, es_subtotal)], 'total'}}.
 
         El total de la sección sale de las líneas de detalle (las marcadas como
-        subtotal no se suman: están para reproducir la foto, no para medir).
+        subtotal no se suman: reproducen la foto, no miden).
         """
         self.ensure_one()
         lineas = self.env["yaguven.apertura.impositivo"].search(
@@ -65,7 +74,6 @@ class SysTangoWizardImpositivo(models.TransientModel):
             if seccion == "patrimonio_neto":
                 total += datos["resultado_acumulado"]["comparativo"]
             out[seccion] = total
-        # las cuentas sin rubro, netas, van al corriente para que el total cuadre
         sin = (datos.get("esp_sin_rubro") or {}).get("comparativo") or {}
         neto = sum(sin.values())
         if neto >= 0:
@@ -74,29 +82,81 @@ class SysTangoWizardImpositivo(models.TransientModel):
             out["pasivo_corriente"] += -neto
         return out
 
-    # -------------------------------------------------------------- la hoja
+    # -------------------------------------------------------------- estilos
 
-    def _build_workbook(self):
-        wb = super()._build_workbook()
-        if not self.show_impositivo:
-            return wb
-        fecha = fields.Date.subtract(self.date_from, days=1)
-        impositivo, hay = self._impositivo_por_seccion(fecha)
-        if not hay:
-            return wb
-        from openpyxl.styles import Alignment, Border, Font, Side
+    def _estilos_impositivo(self):
+        from openpyxl.styles import Border, Font, Side
+        return {
+            "big": Font(bold=True, size=12),
+            "bold": Font(bold=True),
+            "sec": Font(bold=True, size=11),
+            "det": Font(italic=True, color="555555"),
+            "top": Border(top=Side(style="thin")),
+        }
 
+    # -------------------------------------------------- hoja: balance impositivo
+
+    def _hoja_balance_impositivo(self, wb, fecha, impositivo):
+        from openpyxl.styles import Alignment
+        st = self._estilos_impositivo()
+        num = "#,##0.00"
+        ws = wb.create_sheet("Balance impositivo", 0)  # al principio
+        ws.append([f"{self.company_id.name} — Balance impositivo al {fecha.strftime('%d/%m/%Y')}"])
+        ws.cell(ws.max_row, 1).font = st["big"]
+        ws.append(["Cargado en Contabilidad → Configuración → Apertura del balance "
+                   "impositivo. No sale de los asientos."])
+        ws.append([])
+        ws.append(["Concepto", "Importe"])
+        for cell in ws[ws.max_row]:
+            cell.font = st["bold"]
+            cell.alignment = Alignment(horizontal="center")
+
+        def renglon(concepto, importe, kind):
+            sangria = "        " if kind == "det" else ""
+            ws.append([f"{sangria}{concepto}", importe])
+            r = ws.max_row
+            if importe is not None:
+                ws.cell(r, 2).number_format = num
+            font = {"sec": st["sec"], "subtot": st["bold"], "total": st["bold"],
+                    "det": st["det"]}.get(kind)
+            if font:
+                for cell in ws[r]:
+                    cell.font = font
+            if kind == "total":
+                for cell in ws[r]:
+                    cell.border = st["top"]
+
+        tot = {"activo": 0.0, "pasivo": 0.0, "pn": 0.0}
+        for seccion, titulo in SECCIONES_ESP:
+            d = impositivo.get(seccion)
+            if not d:
+                continue
+            renglon(titulo, None, "sec")
+            for concepto, importe, es_sub in d["detalle"]:
+                etiqueta = f"{concepto} (subtotal foto)" if es_sub else concepto
+                renglon(etiqueta, importe, "det")
+            renglon(f"Total {titulo.lower()}", d["total"], "subtot")
+            destino = ("activo" if seccion in ACTIVO
+                       else "pasivo" if seccion in PASIVO else "pn")
+            tot[destino] += d["total"]
+        ws.append([])
+        renglon("TOTAL ACTIVO", tot["activo"], "total")
+        renglon("TOTAL PASIVO", tot["pasivo"], "total")
+        renglon("TOTAL PATRIMONIO NETO", tot["pn"], "total")
+        renglon("TOTAL PASIVO + PATRIMONIO NETO", tot["pasivo"] + tot["pn"], "total")
+        ws.column_dimensions["A"].width = 56
+        ws.column_dimensions["B"].width = 22
+        ws.freeze_panes = "A5"
+
+    # ---------------------------------------------- hoja: contable vs impositivo
+
+    def _hoja_contable_vs_impositivo(self, wb, fecha, impositivo):
+        from openpyxl.styles import Alignment
+        st = self._estilos_impositivo()
+        num = "#,##0.00"
         datos = self._datos_estados()
         contable = self._contable_por_seccion(datos)
-
         ws = wb.create_sheet("Contable vs impositivo")
-        bold = Font(bold=True)
-        big = Font(bold=True, size=12)
-        sec_f = Font(bold=True, size=11)
-        det_f = Font(italic=True, color="555555")
-        top = Border(top=Side(style="thin"))
-        num = "#,##0.00"
-        company = self.company_id
 
         def fila(concepto, c, i, kind="det"):
             dif = round((c or 0.0) - (i or 0.0), 2) if (c is not None and i is not None) else None
@@ -105,23 +165,22 @@ class SysTangoWizardImpositivo(models.TransientModel):
             r = ws.max_row
             for col in (2, 3, 4):
                 ws.cell(r, col).number_format = num
-            font = {"sec": sec_f, "subtot": bold, "total": bold, "det": det_f}.get(kind)
+            font = {"sec": st["sec"], "subtot": st["bold"], "total": st["bold"],
+                    "det": st["det"]}.get(kind)
             if font:
                 for cell in ws[r]:
                     cell.font = font
             if kind == "total":
                 for cell in ws[r]:
-                    cell.border = top
+                    cell.border = st["top"]
 
-        ws.append([f"{company.name} — Apertura al {fecha.strftime('%d/%m/%Y')}"])
-        ws.cell(ws.max_row, 1).font = big
-        ws.append(["Balance contable (legalizado) frente al impositivo. "
-                   "El impositivo se carga en Contabilidad → Configuración → "
-                   "Apertura del balance impositivo. No modifica asientos."])
+        ws.append([f"{self.company_id.name} — Apertura al {fecha.strftime('%d/%m/%Y')}"])
+        ws.cell(ws.max_row, 1).font = st["big"]
+        ws.append(["Balance contable (legalizado) frente al impositivo. No modifica asientos."])
         ws.append([])
         ws.append(["Concepto", "Contable", "Impositivo", "Diferencia (C − I)"])
         for cell in ws[ws.max_row]:
-            cell.font = bold
+            cell.font = st["bold"]
             cell.alignment = Alignment(horizontal="center", wrap_text=True)
 
         tot_c = {"activo": 0.0, "pasivo": 0.0, "pn": 0.0}
@@ -132,7 +191,7 @@ class SysTangoWizardImpositivo(models.TransientModel):
             if not d and abs(c_sec) < 0.005:
                 continue
             ws.append([titulo])
-            ws.cell(ws.max_row, 1).font = sec_f
+            ws.cell(ws.max_row, 1).font = st["sec"]
             for concepto, importe, es_sub in (d["detalle"] if d else []):
                 etiqueta = f"{concepto} (subtotal foto)" if es_sub else concepto
                 fila(etiqueta, None, importe, "det")
@@ -152,7 +211,7 @@ class SysTangoWizardImpositivo(models.TransientModel):
 
         ws.append([])
         ws.append(["Conciliación de la diferencia"])
-        ws.cell(ws.max_row, 1).font = bold
+        ws.cell(ws.max_row, 1).font = st["bold"]
         dif_act = round(tot_c["activo"] - tot_i["activo"], 2)
         dif_pas = round(tot_c["pasivo"] - tot_i["pasivo"], 2)
         dif_pn = round(tot_c["pn"] - tot_i["pn"], 2)
@@ -161,10 +220,26 @@ class SysTangoWizardImpositivo(models.TransientModel):
         fila("    + diferencia de patrimonio neto", dif_pn, None, "det")
         descuadre = round(dif_act - (dif_pas + dif_pn), 2)
         ws.append([f"Control: activo − (pasivo + patrimonio neto) = {self._fmt(descuadre)}"])
-        ws.cell(ws.max_row, 1).font = det_f
-
+        ws.cell(ws.max_row, 1).font = st["det"]
         ws.column_dimensions["A"].width = 56
         for letra in "BCD":
             ws.column_dimensions[letra].width = 20
         ws.freeze_panes = "A5"
+
+    # -------------------------------------------------------------- orquesta
+
+    def _build_workbook(self):
+        wb = super()._build_workbook()
+        if not (self.show_impositivo or self.show_balance_impositivo):
+            return wb
+        fecha = fields.Date.subtract(self.date_from, days=1)
+        impositivo, hay = self._impositivo_por_seccion(fecha)
+        if not hay:
+            return wb
+        # primero la comparación (se agrega al final); después el balance solo
+        # (se inserta al principio), para que «Balance impositivo» quede primero.
+        if self.show_impositivo:
+            self._hoja_contable_vs_impositivo(wb, fecha, impositivo)
+        if self.show_balance_impositivo:
+            self._hoja_balance_impositivo(wb, fecha, impositivo)
         return wb
