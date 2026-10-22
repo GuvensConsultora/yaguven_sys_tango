@@ -234,6 +234,80 @@ class SysTangoWizardDetalle(models.TransientModel):
         ws.freeze_panes = ws.cell(encabezado + 1, 1)
         return ws
 
+    def _mayor_mensual(self, cuentas, excluidos=()):
+        """[(etiqueta_mes, debe, haber, movimiento, acumulado)] por mes del
+        período. Para mayores de resultado (ventas, costo), que no arrastran saldo
+        inicial, agrupados por mes en vez de línea por línea."""
+        self.ensure_one()
+        if not cuentas:
+            return [], 0.0
+        import calendar
+        from datetime import date
+        MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+                 "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+        base = [("company_id", "=", self.company_id.id), ("parent_state", "=", "posted"),
+                ("account_id", "in", cuentas.ids)]
+        if excluidos:
+            base.append(("move_id", "not in", list(excluidos)))
+        AML = self.env["account.move.line"].with_company(self.company_id)
+        filas, acum = [], 0.0
+        y, m = self.date_from.year, self.date_from.month
+        while (y, m) <= (self.date_to.year, self.date_to.month):
+            desde = max(date(y, m, 1), self.date_from)
+            hasta = min(date(y, m, calendar.monthrange(y, m)[1]), self.date_to)
+            g = AML._read_group(base + [("date", ">=", desde), ("date", "<=", hasta)],
+                                [], ["debit:sum", "credit:sum"])
+            debit, credit = (g[0] if g else (0.0, 0.0))
+            debit, credit = debit or 0.0, credit or 0.0
+            acum += debit - credit
+            filas.append((f"{MESES[m - 1]} {y}", debit, credit, debit - credit, acum))
+            m += 1
+            if m > 12:
+                m, y = 1, y + 1
+        return filas, acum
+
+    def _hoja_mayor_mensual(self, wb, titulo, cuentas, excluidos):
+        from openpyxl.styles import Alignment, Font
+
+        filas, final = self._mayor_mensual(cuentas, excluidos)
+        ws = wb.create_sheet(titulo)
+        bold = Font(bold=True)
+        ws.append([f"{titulo} por mes — del {self.date_from.strftime('%d/%m/%Y')} "
+                   f"al {self.date_to.strftime('%d/%m/%Y')}"])
+        ws.cell(1, 1).font = Font(bold=True, size=12)
+        ws.append([])
+        ws.append(["Mes", "Debe", "Haber", "Movimiento del mes", "Saldo acumulado"])
+        for cell in ws[ws.max_row]:
+            cell.font = bold
+            cell.alignment = Alignment(horizontal="center", wrap_text=True)
+        encabezado = ws.max_row
+        for mes, debe, haber, mov, acum in filas:
+            ws.append([mes, debe, haber, mov, acum])
+            for col in (2, 3, 4, 5):
+                ws.cell(ws.max_row, col).number_format = "#,##0.00"
+        ws.append(["TOTAL", sum(f[1] for f in filas), sum(f[2] for f in filas),
+                   sum(f[3] for f in filas), final])
+        for cell in ws[ws.max_row]:
+            cell.font = bold
+        for col in (2, 3, 4, 5):
+            ws.cell(ws.max_row, col).number_format = "#,##0.00"
+
+        saldo_contable = sum(
+            self._saldos_por_cuenta(self.date_to, excluidos).get(c, 0.0) for c in cuentas)
+        diferencia = final - saldo_contable
+        ws.append([])
+        ws.append(["Control"])
+        ws.cell(ws.max_row, 1).font = bold
+        ws.append(["Saldo final del mayor contra el saldo de las cuentas: "
+                   + ("OK" if self.company_id.currency_id.is_zero(diferencia)
+                      else f"DIFERENCIA {self._fmt(diferencia)}")])
+        ws.append(["Cuentas incluidas: "
+                   + (", ".join(f"{c.code} {c.name}" for c in cuentas) or "ninguna")])
+        for letra, ancho in (("A", 18), ("B", 20), ("C", 20), ("D", 22), ("E", 20)):
+            ws.column_dimensions[letra].width = ancho
+        ws.freeze_panes = ws.cell(encabezado + 1, 1)
+        return ws
+
     def _build_workbook(self):
         wb = super()._build_workbook()
         if not self.show_detail_sheets:
@@ -248,13 +322,12 @@ class SysTangoWizardDetalle(models.TransientModel):
         self._hoja_composicion(
             wb, "Acreedores", self._cuentas_de_rubros(RUBROS_ACREEDORES, saldos), excluidos
         )
-        self._hoja_mayor(
-            wb, "Mayor de ventas", self._cuentas_de_rubros(RUBROS_VENTAS, saldos),
-            False, excluidos
+        self._hoja_mayor_mensual(
+            wb, "Mayor de ventas", self._cuentas_de_rubros(RUBROS_VENTAS, saldos), excluidos
         )
-        self._hoja_mayor(
-            wb, "Mayor de costo de mercaderías", self._cuentas_de_rubros(RUBROS_COSTO, saldos),
-            False, excluidos
+        self._hoja_mayor_mensual(
+            wb, "Mayor de costo de mercaderías",
+            self._cuentas_de_rubros(RUBROS_COSTO, saldos), excluidos
         )
         self._hoja_mayor(
             wb, "Mayor de mercaderías", self._cuentas_de_rubros(RUBROS_MERCADERIAS, saldos),
