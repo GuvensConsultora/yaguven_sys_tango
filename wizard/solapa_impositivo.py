@@ -34,6 +34,14 @@ class SysTangoWizardImpositivo(models.TransientModel):
         help="Agrega una solapa que compara, por sección, el balance contable "
         "con el impositivo, y concilia la diferencia.",
     )
+    show_impositivo_comparativo = fields.Boolean(
+        string="Balance impositivo comparativo (Odoo)",
+        default=False,
+        help="Agrega una solapa con el balance al cierre del ejercicio según los "
+        "saldos de Odoo (a la fecha «hasta»), comparado con el impositivo del "
+        "ejercicio anterior (la apertura). Si no hay impositivo cargado, no se "
+        "agrega.",
+    )
 
     # -------------------------------------------------------------- datos
 
@@ -80,6 +88,32 @@ class SysTangoWizardImpositivo(models.TransientModel):
             out["activo_corriente"] += neto
         else:
             out["pasivo_corriente"] += -neto
+        return out
+
+    def _odoo_por_seccion(self, datos, columna):
+        """{seccion: saldo Odoo} para la columna «actual» o «comparativo», con el
+        patrimonio neto SIN el resultado y el resultado del ejercicio aparte
+        (clave «resultado»), para comparar contra el layout del impositivo."""
+        self.ensure_one()
+        Rubro = self.env["yaguven.rubro"]
+        out = {}
+        for seccion, _t in SECCIONES_ESP:
+            total = 0.0
+            for rubro in Rubro.search([("section", "=", seccion),
+                                       ("company_id", "=", self.company_id.id)]):
+                d = datos["esp"][columna].get(rubro)
+                if not d:
+                    continue
+                bruto = sum(d["partidas"].values()) + sum(d["regul"].values())
+                total += -bruto if (seccion in PASIVO or seccion == "patrimonio_neto") else bruto
+            out[seccion] = total
+        sin = (datos.get("esp_sin_rubro") or {}).get(columna) or {}
+        neto = sum(sin.values())
+        if neto >= 0:
+            out["activo_corriente"] += neto
+        else:
+            out["pasivo_corriente"] += -neto
+        out["resultado"] = datos["resultado_acumulado"][columna]
         return out
 
     # -------------------------------------------------------------- estilos
@@ -242,20 +276,93 @@ class SysTangoWizardImpositivo(models.TransientModel):
             ws.column_dimensions[letra].width = 20
         ws.freeze_panes = "A5"
 
+    # ------------------------------ hoja: balance impositivo comparativo (Odoo)
+
+    def _hoja_balance_impositivo_comparativo(self, wb, impositivo):
+        from openpyxl.styles import Alignment
+        st = self._estilos_impositivo()
+        num = "#,##0.00"
+        datos = self._datos_estados()
+        odoo = self._odoo_por_seccion(datos, "actual")
+        actual = self.date_to.strftime("%d/%m/%Y")
+        anterior = fields.Date.subtract(self.date_from, days=1).strftime("%d/%m/%Y")
+        ws = wb.create_sheet("Balance impositivo comparativo", 0)
+        ws.append([f"{self.company_id.name} — Balance impositivo comparativo"])
+        ws.cell(ws.max_row, 1).font = st["big"]
+        ws.append([f"Saldos de Odoo al {actual} frente al balance impositivo del "
+                   f"ejercicio anterior al {anterior} (cargado). Odoo por rubro."])
+        ws.append([])
+        ws.append(["Código", "Concepto", f"Odoo al {actual}", f"Impositivo al {anterior}"])
+        for cell in ws[ws.max_row]:
+            cell.font = st["bold"]
+            cell.alignment = Alignment(horizontal="center", wrap_text=True)
+
+        def renglon(codigo, concepto, od, im, kind):
+            sangria = "    " if kind == "det" else ""
+            ws.append([codigo or "", f"{sangria}{concepto}", od, im])
+            r = ws.max_row
+            for col in (3, 4):
+                ws.cell(r, col).number_format = num
+            font = {"sec": st["sec"], "subtot": st["bold"], "total": st["bold"],
+                    "det": st["det"]}.get(kind)
+            if font:
+                for cell in ws[r]:
+                    cell.font = font
+            if kind == "total":
+                for cell in ws[r]:
+                    cell.border = st["top"]
+
+        secciones = list(SECCIONES_ESP) + [
+            ("resultado", "RESULTADO DEL EJERCICIO (ganancias y pérdidas)")]
+        tot_o = {"activo": 0.0, "pasivo": 0.0, "pn": 0.0, "resultado": 0.0}
+        tot_i = {"activo": 0.0, "pasivo": 0.0, "pn": 0.0, "resultado": 0.0}
+        for seccion, titulo in secciones:
+            d = impositivo.get(seccion)
+            od_sec = odoo.get(seccion, 0.0)
+            if not d and abs(od_sec) < 0.005:
+                continue
+            renglon(None, titulo, None, None, "sec")
+            for codigo, concepto, importe, es_sub in (d["detalle"] if d else []):
+                etiqueta = f"{concepto} (subtotal foto)" if es_sub else concepto
+                renglon(codigo, etiqueta, None, importe, "det")
+            im_sec = d["total"] if d else 0.0
+            renglon(None, f"Total {titulo.lower()}", od_sec, im_sec, "subtot")
+            destino = ("activo" if seccion in ACTIVO
+                       else "pasivo" if seccion in PASIVO
+                       else "resultado" if seccion == "resultado" else "pn")
+            tot_o[destino] += od_sec
+            tot_i[destino] += im_sec
+        ws.append([])
+        renglon(None, "TOTAL ACTIVO", tot_o["activo"], tot_i["activo"], "total")
+        renglon(None, "TOTAL PASIVO", tot_o["pasivo"], tot_i["pasivo"], "total")
+        renglon(None, "TOTAL PATRIMONIO NETO", tot_o["pn"], tot_i["pn"], "total")
+        renglon(None, "TOTAL RESULTADO DEL EJERCICIO", tot_o["resultado"], tot_i["resultado"], "total")
+        renglon(None, "TOTAL PASIVO + PN + RESULTADO",
+                tot_o["pasivo"] + tot_o["pn"] + tot_o["resultado"],
+                tot_i["pasivo"] + tot_i["pn"] + tot_i["resultado"], "total")
+        ws.column_dimensions["A"].width = 16
+        ws.column_dimensions["B"].width = 48
+        ws.column_dimensions["C"].width = 20
+        ws.column_dimensions["D"].width = 20
+        ws.freeze_panes = "A5"
+
     # -------------------------------------------------------------- orquesta
 
     def _build_workbook(self):
         wb = super()._build_workbook()
-        if not (self.show_impositivo or self.show_balance_impositivo):
+        if not (self.show_impositivo or self.show_balance_impositivo
+                or self.show_impositivo_comparativo):
             return wb
         fecha = fields.Date.subtract(self.date_from, days=1)
         impositivo, hay = self._impositivo_por_seccion(fecha)
         if not hay:
             return wb
-        # primero la comparación (se agrega al final); después el balance solo
-        # (se inserta al principio), para que «Balance impositivo» quede primero.
+        # primero la comparación (se agrega al final); después los balances
+        # (se insertan al principio), para que queden primeros.
         if self.show_impositivo:
             self._hoja_contable_vs_impositivo(wb, fecha, impositivo)
         if self.show_balance_impositivo:
             self._hoja_balance_impositivo(wb, fecha, impositivo)
+        if self.show_impositivo_comparativo:
+            self._hoja_balance_impositivo_comparativo(wb, impositivo)
         return wb

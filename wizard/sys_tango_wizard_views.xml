@@ -18,6 +18,7 @@
                         <field name="show_detail_sheets"/>
                         <field name="show_balance_impositivo"/>
                         <field name="show_impositivo"/>
+                        <field name="show_impositivo_comparativo"/>
                     </group>
                 </group>
                 <footer>
