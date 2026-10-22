@@ -53,6 +53,11 @@ class AperturaImpositivo(models.Model):
         "línea. El subtotal del impositivo de cada sección se compara con el "
         "total contable de esa sección.",
     )
+    codigo = fields.Char(
+        string="Código de cuenta (Tango)",
+        help="Código de la cuenta en el balance impositivo de Tango "
+        "(por ejemplo 1.01.01.01.0000). Se muestra en la solapa.",
+    )
     concepto = fields.Char(string="Concepto", required=True)
     importe = fields.Monetary(
         string="Importe",

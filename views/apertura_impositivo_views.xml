@@ -8,6 +8,7 @@
                 <field name="sequence" widget="handle"/>
                 <field name="fecha"/>
                 <field name="section"/>
+                <field name="codigo"/>
                 <field name="concepto"/>
                 <field name="importe"/>
                 <field name="es_subtotal"/>
@@ -28,6 +29,7 @@
                         <group>
                             <field name="fecha"/>
                             <field name="section"/>
+                            <field name="codigo"/>
                             <field name="concepto"/>
                         </group>
                         <group>

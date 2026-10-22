@@ -51,7 +51,7 @@ class SysTangoWizardImpositivo(models.TransientModel):
         datos = {}
         for ln in lineas:
             d = datos.setdefault(ln.section, {"detalle": [], "total": 0.0})
-            d["detalle"].append((ln.concepto, ln.importe, ln.es_subtotal))
+            d["detalle"].append((ln.codigo, ln.concepto, ln.importe, ln.es_subtotal))
             if not ln.es_subtotal:
                 d["total"] += ln.importe
         return datos, bool(lineas)
@@ -106,17 +106,17 @@ class SysTangoWizardImpositivo(models.TransientModel):
         ws.append(["Cargado en Contabilidad → Configuración → Apertura del balance "
                    "impositivo. No sale de los asientos."])
         ws.append([])
-        ws.append(["Concepto", "Importe"])
+        ws.append(["Código", "Concepto", "Importe"])
         for cell in ws[ws.max_row]:
             cell.font = st["bold"]
             cell.alignment = Alignment(horizontal="center")
 
-        def renglon(concepto, importe, kind):
-            sangria = "        " if kind == "det" else ""
-            ws.append([f"{sangria}{concepto}", importe])
+        def renglon(codigo, concepto, importe, kind):
+            sangria = "    " if kind == "det" else ""
+            ws.append([codigo or "", f"{sangria}{concepto}", importe])
             r = ws.max_row
             if importe is not None:
-                ws.cell(r, 2).number_format = num
+                ws.cell(r, 3).number_format = num
             font = {"sec": st["sec"], "subtot": st["bold"], "total": st["bold"],
                     "det": st["det"]}.get(kind)
             if font:
@@ -133,25 +133,26 @@ class SysTangoWizardImpositivo(models.TransientModel):
             d = impositivo.get(seccion)
             if not d:
                 continue
-            renglon(titulo, None, "sec")
-            for concepto, importe, es_sub in d["detalle"]:
+            renglon(None, titulo, None, "sec")
+            for codigo, concepto, importe, es_sub in d["detalle"]:
                 etiqueta = f"{concepto} (subtotal foto)" if es_sub else concepto
-                renglon(etiqueta, importe, "det")
-            renglon(f"Total {titulo.lower()}", d["total"], "subtot")
+                renglon(codigo, etiqueta, importe, "det")
+            renglon(None, f"Total {titulo.lower()}", d["total"], "subtot")
             destino = ("activo" if seccion in ACTIVO
                        else "pasivo" if seccion in PASIVO
                        else "resultado" if seccion == "resultado" else "pn")
             tot[destino] += d["total"]
         ws.append([])
-        renglon("TOTAL ACTIVO", tot["activo"], "total")
-        renglon("TOTAL PASIVO", tot["pasivo"], "total")
-        renglon("TOTAL PATRIMONIO NETO", tot["pn"], "total")
+        renglon(None, "TOTAL ACTIVO", tot["activo"], "total")
+        renglon(None, "TOTAL PASIVO", tot["pasivo"], "total")
+        renglon(None, "TOTAL PATRIMONIO NETO", tot["pn"], "total")
         if abs(tot["resultado"]) >= 0.005:
-            renglon("TOTAL RESULTADO DEL EJERCICIO", tot["resultado"], "total")
-        renglon("TOTAL PASIVO + PN + RESULTADO",
+            renglon(None, "TOTAL RESULTADO DEL EJERCICIO", tot["resultado"], "total")
+        renglon(None, "TOTAL PASIVO + PN + RESULTADO",
                 tot["pasivo"] + tot["pn"] + tot["resultado"], "total")
-        ws.column_dimensions["A"].width = 56
-        ws.column_dimensions["B"].width = 22
+        ws.column_dimensions["A"].width = 16
+        ws.column_dimensions["B"].width = 52
+        ws.column_dimensions["C"].width = 22
         ws.freeze_panes = "A5"
 
     # ---------------------------------------------- hoja: contable vs impositivo
@@ -201,12 +202,15 @@ class SysTangoWizardImpositivo(models.TransientModel):
                 continue
             ws.append([titulo])
             ws.cell(ws.max_row, 1).font = st["sec"]
-            for concepto, importe, es_sub in (d["detalle"] if d else []):
+            for codigo, concepto, importe, es_sub in (d["detalle"] if d else []):
                 etiqueta = f"{concepto} (subtotal foto)" if es_sub else concepto
+                if codigo:
+                    etiqueta = f"{codigo}  {etiqueta}"
                 fila(etiqueta, None, importe, "det")
             if extra:
-                for concepto, importe, es_sub in extra["detalle"]:
-                    fila(concepto, None, importe, "det")
+                for codigo, concepto, importe, es_sub in extra["detalle"]:
+                    etiqueta = f"{codigo}  {concepto}" if codigo else concepto
+                    fila(etiqueta, None, importe, "det")
             i_sec = (d["total"] if d else 0.0) + (extra["total"] if extra else 0.0)
             fila(f"Total {titulo.lower()}", c_sec, i_sec, "subtot")
             destino = ("activo" if seccion in ACTIVO
