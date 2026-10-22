@@ -325,6 +325,15 @@ class SysTangoWizardImpositivo(models.TransientModel):
             for codigo, concepto, importe, es_sub in (d["detalle"] if d else []):
                 etiqueta = f"{concepto} (subtotal foto)" if es_sub else concepto
                 renglon(codigo, etiqueta, None, importe, "det")
+            # estado de resultados de Odoo (columna actual), por rubro
+            if seccion == "resultado":
+                Rubro = self.env["yaguven.rubro"]
+                for rubro in Rubro.search([("section", "=", "resultado"),
+                                           ("company_id", "=", self.company_id.id)]):
+                    dd = datos["er"].get(rubro)
+                    valor = -(sum(dd["partidas"].values()) + sum(dd["regul"].values())) if dd else 0.0
+                    if abs(valor) >= 0.005:
+                        renglon(rubro.code, f"{rubro.name} (Odoo)", valor, None, "det")
             im_sec = d["total"] if d else 0.0
             renglon(None, f"Total {titulo.lower()}", od_sec, im_sec, "subtot")
             destino = ("activo" if seccion in ACTIVO
