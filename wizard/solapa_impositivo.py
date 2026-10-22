@@ -165,6 +165,17 @@ class SysTangoWizardImpositivo(models.TransientModel):
         exclusion = self._excluded_moves()
         por_cuenta, por_grupo = self._mapeos_por_clave()
 
+        # La sección se decide con el saldo TOTAL de la cuenta (estable): si se
+        # decidiera con el saldo por diario, una cuenta con condición por signo
+        # se partiría entre activo y pasivo e infla los totales.
+        seccion_de = {}
+        for account, saldo in self._saldos_por_cuenta(hasta, exclusion["move_ids"]).items():
+            if abs(saldo) < 0.005:
+                continue
+            rubro, _r, _m = self._rubro_de(account, saldo, por_cuenta, por_grupo)
+            seccion_de[account.id] = (rubro.section if rubro else
+                self._SECCION_POR_NATURALEZA.get(account.internal_group, "activo_corriente"))
+
         # mapeo Odoo -> Tango (con reparto por diario cuando existe)
         tango_of, split = {}, set()
         for m in self.env["yaguven.tango.mapping"].search(
@@ -187,9 +198,8 @@ class SysTangoWizardImpositivo(models.TransientModel):
             saldo = (debit or 0.0) - (credit or 0.0)
             if abs(saldo) < 0.005:
                 continue
-            rubro, _regul, _m = self._rubro_de(account, saldo, por_cuenta, por_grupo)
-            seccion = (rubro.section if rubro else
-                       self._SECCION_POR_NATURALEZA.get(account.internal_group, "activo_corriente"))
+            seccion = seccion_de.get(account.id) or self._SECCION_POR_NATURALEZA.get(
+                account.internal_group, "activo_corriente")
             jid = journal.id if (account.id in split and journal) else 0
             tango = tango_of.get((account.id, jid)) or tango_of.get((account.id, 0))
             if tango:
