@@ -188,12 +188,13 @@ class SysTangoWizardImpositivo(models.TransientModel):
         datos = self._datos_estados()
         data = self._odoo_detallado_por_seccion(datos, "actual")
         actual = self.date_to.strftime("%d/%m/%Y")
-        self._hoja_balance_formato(
+        ws = self._hoja_balance_formato(
             wb, "Balance Odoo (impositivo)",
             f"{self.company_id.name} — Balance al {actual} (formato impositivo, datos de Odoo)",
             "Saldos de Odoo al cierre, en el layout del balance impositivo. "
             "Patrimonio neto sin el resultado; resultado del ejercicio aparte.",
             data)
+        self._footer_exclusion(ws)
 
     def _hoja_balance_formato(self, wb, sheet_name, titulo, subtitulo, datos_sec):
         from openpyxl.styles import Alignment
@@ -254,6 +255,23 @@ class SysTangoWizardImpositivo(models.TransientModel):
         ws.column_dimensions["B"].width = 52
         ws.column_dimensions["C"].width = 22
         ws.freeze_panes = "A5"
+        return ws
+
+    def _footer_exclusion(self, ws):
+        """Pie que deja constancia de las cuentas excluidas del SyS Tango (y los
+        asientos que, con sus contrapartidas, quedaron afuera), igual que la
+        solapa «Balance de saldos». Sólo para los balances que salen de Odoo."""
+        st = self._estilos_impositivo()
+        exclusion = self._excluded_moves()
+        if not exclusion["accounts"]:
+            return
+        codes = ", ".join(f"{a.code} {a.name}" for a in exclusion["accounts"])
+        ws.append([])
+        ws.append([f"Cuentas excluidas del SyS Tango: {len(exclusion['accounts'])} ({codes})"])
+        ws.cell(ws.max_row, 1).font = st["det"]
+        ws.append([f"Asientos que las tocan y quedaron afuera: {exclusion['moves']} asientos · "
+                   f"{exclusion['count']} líneas del período · débitos {self._fmt(exclusion['debit'])}"])
+        ws.cell(ws.max_row, 1).font = st["det"]
 
     # ---------------------------------------------- hoja: contable vs impositivo
 
@@ -420,6 +438,7 @@ class SysTangoWizardImpositivo(models.TransientModel):
         ws.column_dimensions["C"].width = 20
         ws.column_dimensions["D"].width = 20
         ws.freeze_panes = "A5"
+        self._footer_exclusion(ws)
 
     # -------------------------------------------------------------- orquesta
 
