@@ -126,8 +126,10 @@ class SysTangoWizardImpositivo(models.TransientModel):
                 for cell in ws[r]:
                     cell.border = st["top"]
 
-        tot = {"activo": 0.0, "pasivo": 0.0, "pn": 0.0}
-        for seccion, titulo in SECCIONES_ESP:
+        secciones = list(SECCIONES_ESP) + [
+            ("resultado", "RESULTADO DEL EJERCICIO (ganancias y pérdidas)")]
+        tot = {"activo": 0.0, "pasivo": 0.0, "pn": 0.0, "resultado": 0.0}
+        for seccion, titulo in secciones:
             d = impositivo.get(seccion)
             if not d:
                 continue
@@ -137,13 +139,17 @@ class SysTangoWizardImpositivo(models.TransientModel):
                 renglon(etiqueta, importe, "det")
             renglon(f"Total {titulo.lower()}", d["total"], "subtot")
             destino = ("activo" if seccion in ACTIVO
-                       else "pasivo" if seccion in PASIVO else "pn")
+                       else "pasivo" if seccion in PASIVO
+                       else "resultado" if seccion == "resultado" else "pn")
             tot[destino] += d["total"]
         ws.append([])
         renglon("TOTAL ACTIVO", tot["activo"], "total")
         renglon("TOTAL PASIVO", tot["pasivo"], "total")
         renglon("TOTAL PATRIMONIO NETO", tot["pn"], "total")
-        renglon("TOTAL PASIVO + PATRIMONIO NETO", tot["pasivo"] + tot["pn"], "total")
+        if abs(tot["resultado"]) >= 0.005:
+            renglon("TOTAL RESULTADO DEL EJERCICIO", tot["resultado"], "total")
+        renglon("TOTAL PASIVO + PN + RESULTADO",
+                tot["pasivo"] + tot["pn"] + tot["resultado"], "total")
         ws.column_dimensions["A"].width = 56
         ws.column_dimensions["B"].width = 22
         ws.freeze_panes = "A5"
@@ -188,14 +194,20 @@ class SysTangoWizardImpositivo(models.TransientModel):
         for seccion, titulo in SECCIONES_ESP:
             d = impositivo.get(seccion)
             c_sec = contable.get(seccion, 0.0)
-            if not d and abs(c_sec) < 0.005:
+            # el resultado impositivo va sin cerrar; el contable ya está dentro
+            # del PN, así que lo pliego en el patrimonio neto para comparar.
+            extra = impositivo.get("resultado") if seccion == "patrimonio_neto" else None
+            if not d and not extra and abs(c_sec) < 0.005:
                 continue
             ws.append([titulo])
             ws.cell(ws.max_row, 1).font = st["sec"]
             for concepto, importe, es_sub in (d["detalle"] if d else []):
                 etiqueta = f"{concepto} (subtotal foto)" if es_sub else concepto
                 fila(etiqueta, None, importe, "det")
-            i_sec = d["total"] if d else 0.0
+            if extra:
+                for concepto, importe, es_sub in extra["detalle"]:
+                    fila(concepto, None, importe, "det")
+            i_sec = (d["total"] if d else 0.0) + (extra["total"] if extra else 0.0)
             fila(f"Total {titulo.lower()}", c_sec, i_sec, "subtot")
             destino = ("activo" if seccion in ACTIVO
                        else "pasivo" if seccion in PASIVO else "pn")

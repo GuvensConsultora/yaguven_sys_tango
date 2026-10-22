@@ -9,6 +9,7 @@ SECCIONES = [
     ("pasivo_corriente", "Pasivo corriente"),
     ("pasivo_no_corriente", "Pasivo no corriente"),
     ("patrimonio_neto", "Patrimonio neto"),
+    ("resultado", "Resultado (ganancias y pérdidas)"),
 ]
 
 
