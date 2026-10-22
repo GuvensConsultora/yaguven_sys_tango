@@ -153,32 +153,61 @@ class SysTangoWizardImpositivo(models.TransientModel):
     }
 
     def _odoo_detallado_por_seccion(self, datos, columna):
-        """El balance de Odoo en el formato del impositivo, abierto CUENTA POR
-        CUENTA para poder analizarlo (bancos, gastos, patrimonio neto, todo). Cada
-        cuenta con saldo va a la sección de su rubro (o, si no tiene, a la que
-        corresponde por su naturaleza). El activo suma su saldo deudor; el pasivo,
-        el patrimonio neto y el resultado, su saldo acreedor. El patrimonio neto
-        queda sin el resultado del ejercicio, que arma su propia sección."""
+        """El balance de Odoo en el formato del impositivo, abierto para poder
+        analizarlo, pero con los CÓDIGOS Y NOMBRES DE CUENTA DE TANGO (vía
+        yaguven.tango.mapping), no los de Odoo. Cada saldo Odoo se agrega bajo su
+        cuenta Tango (respetando el reparto por diario), en la sección del rubro
+        del ESP (o por naturaleza si no tiene). El activo suma su saldo deudor; el
+        pasivo, el patrimonio neto y el resultado, su saldo acreedor. El patrimonio
+        neto queda sin el resultado del ejercicio, que arma su propia sección."""
         self.ensure_one()
         hasta = self.date_to if columna == "actual" else fields.Date.subtract(self.date_from, days=1)
         exclusion = self._excluded_moves()
-        saldos = self._saldos_por_cuenta(hasta, exclusion["move_ids"])
         por_cuenta, por_grupo = self._mapeos_por_clave()
-        out = {}
-        for account, saldo in saldos.items():
+
+        # mapeo Odoo -> Tango (con reparto por diario cuando existe)
+        tango_of, split = {}, set()
+        for m in self.env["yaguven.tango.mapping"].search(
+                [("company_id", "=", self.company_id.id)]):
+            tango_of[(m.account_id.id, m.journal_id.id or 0)] = m.tango_account_id
+            if m.journal_id:
+                split.add(m.account_id.id)
+
+        dominio = [("company_id", "=", self.company_id.id), ("parent_state", "=", "posted"),
+                   ("date", "<=", hasta)]
+        if exclusion["move_ids"]:
+            dominio.append(("move_id", "not in", list(exclusion["move_ids"])))
+        AML = self.env["account.move.line"].with_company(self.company_id)
+
+        agregado = {}
+        for account, journal, debit, credit in AML._read_group(
+                dominio, ["account_id", "journal_id"], ["debit:sum", "credit:sum"]):
+            if not account:
+                continue
+            saldo = (debit or 0.0) - (credit or 0.0)
             if abs(saldo) < 0.005:
                 continue
-            rubro, regulariza, _m = self._rubro_de(account, saldo, por_cuenta, por_grupo)
-            if rubro:
-                seccion = rubro.section
+            rubro, _regul, _m = self._rubro_de(account, saldo, por_cuenta, por_grupo)
+            seccion = (rubro.section if rubro else
+                       self._SECCION_POR_NATURALEZA.get(account.internal_group, "activo_corriente"))
+            jid = journal.id if (account.id in split and journal) else 0
+            tango = tango_of.get((account.id, jid)) or tango_of.get((account.id, 0))
+            if tango:
+                codigo, nombre, clave = tango.code, tango.name, ("t", tango.id)
             else:
-                seccion = self._SECCION_POR_NATURALEZA.get(account.internal_group, "activo_corriente")
-                regulariza = False
+                codigo, nombre, clave = (account.code or ""), account.name, ("o", account.id)
             valor = saldo if seccion in ACTIVO else -saldo
-            nombre = account.name + (" (regularizadora)" if regulariza else "")
-            d = out.setdefault(seccion, {"detalle": [], "total": 0.0})
-            d["detalle"].append((account.code or "", nombre, round(valor, 2), False))
-            d["total"] += valor
+            d = agregado.setdefault((seccion, clave),
+                                    {"codigo": codigo, "nombre": nombre, "valor": 0.0})
+            d["valor"] += valor
+
+        out = {}
+        for (seccion, _clave), d in agregado.items():
+            if abs(d["valor"]) < 0.005:
+                continue
+            s = out.setdefault(seccion, {"detalle": [], "total": 0.0})
+            s["detalle"].append((d["codigo"], d["nombre"], round(d["valor"], 2), False))
+            s["total"] += d["valor"]
         for seccion in out:
             out[seccion]["detalle"].sort(key=lambda x: x[0])
             out[seccion]["total"] = round(out[seccion]["total"], 2)
