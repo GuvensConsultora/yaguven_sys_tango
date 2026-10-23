@@ -154,27 +154,36 @@ class SysTangoWizardImpositivo(models.TransientModel):
 
     def _odoo_detallado_por_seccion(self, datos, columna):
         """El balance de Odoo en el formato del impositivo, abierto para poder
-        analizarlo, pero con los CÓDIGOS Y NOMBRES DE CUENTA DE TANGO (vía
-        yaguven.tango.mapping), no los de Odoo. Cada saldo Odoo se agrega bajo su
-        cuenta Tango (respetando el reparto por diario), en la sección del rubro
-        del ESP (o por naturaleza si no tiene). El activo suma su saldo deudor; el
-        pasivo, el patrimonio neto y el resultado, su saldo acreedor. El patrimonio
-        neto queda sin el resultado del ejercicio, que arma su propia sección."""
+        analizarlo, con los CÓDIGOS Y NOMBRES DE CUENTA DE TANGO (vía
+        yaguven.tango.mapping), no los de Odoo, y agrupado por SECCIÓN → RUBRO
+        RT 59 → código Tango. Cada saldo Odoo se agrega bajo su cuenta Tango
+        (respetando el reparto por diario), en el rubro del ESP (o «sin rubro» si
+        no tiene). El activo suma su saldo deudor; el pasivo, el patrimonio neto y
+        el resultado, su saldo acreedor. El patrimonio neto queda sin el resultado
+        del ejercicio, que arma su propia sección.
+
+        Devuelve {seccion: {"rubros": [{"code","name","detalle","total"}], "total"}}
+        con los rubros ordenados por su código."""
         self.ensure_one()
         hasta = self.date_to if columna == "actual" else fields.Date.subtract(self.date_from, days=1)
         exclusion = self._excluded_moves()
         por_cuenta, por_grupo = self._mapeos_por_clave()
 
-        # La sección se decide con el saldo TOTAL de la cuenta (estable): si se
-        # decidiera con el saldo por diario, una cuenta con condición por signo
-        # se partiría entre activo y pasivo e infla los totales.
-        seccion_de = {}
+        # La sección y el RUBRO se deciden con el saldo TOTAL de la cuenta
+        # (estable): si se usara el saldo por diario, una cuenta con condición por
+        # signo se partiría entre activo y pasivo e inflaría los totales.
+        seccion_de, rubro_de = {}, {}
         for account, saldo in self._saldos_por_cuenta(hasta, exclusion["move_ids"]).items():
             if abs(saldo) < 0.005:
                 continue
             rubro, _r, _m = self._rubro_de(account, saldo, por_cuenta, por_grupo)
-            seccion_de[account.id] = (rubro.section if rubro else
-                self._SECCION_POR_NATURALEZA.get(account.internal_group, "activo_corriente"))
+            if rubro:
+                seccion_de[account.id] = rubro.section
+                rubro_de[account.id] = (rubro.sequence, rubro.code or "", rubro.name)
+            else:
+                seccion_de[account.id] = self._SECCION_POR_NATURALEZA.get(
+                    account.internal_group, "activo_corriente")
+                rubro_de[account.id] = (9999, "", "(sin rubro asignado)")
 
         # mapeo Odoo -> Tango (con reparto por diario cuando existe)
         tango_of, split = {}, set()
@@ -190,6 +199,7 @@ class SysTangoWizardImpositivo(models.TransientModel):
             dominio.append(("move_id", "not in", list(exclusion["move_ids"])))
         AML = self.env["account.move.line"].with_company(self.company_id)
 
+        # agregado por (sección, rubro, código Tango)
         agregado = {}
         for account, journal, debit, credit in AML._read_group(
                 dominio, ["account_id", "journal_id"], ["debit:sum", "credit:sum"]):
@@ -200,6 +210,7 @@ class SysTangoWizardImpositivo(models.TransientModel):
                 continue
             seccion = seccion_de.get(account.id) or self._SECCION_POR_NATURALEZA.get(
                 account.internal_group, "activo_corriente")
+            rubro = rubro_de.get(account.id) or (9999, "", "(sin rubro asignado)")
             jid = journal.id if (account.id in split and journal) else 0
             tango = tango_of.get((account.id, jid)) or tango_of.get((account.id, 0))
             if tango:
@@ -207,32 +218,96 @@ class SysTangoWizardImpositivo(models.TransientModel):
             else:
                 codigo, nombre, clave = (account.code or ""), account.name, ("o", account.id)
             valor = saldo if seccion in ACTIVO else -saldo
-            d = agregado.setdefault((seccion, clave),
+            d = agregado.setdefault((seccion, rubro, clave),
                                     {"codigo": codigo, "nombre": nombre, "valor": 0.0})
             d["valor"] += valor
 
-        out = {}
-        for (seccion, _clave), d in agregado.items():
+        # salida: cada sección con sus rubros (ordenados por código), y cada rubro
+        # con su detalle de códigos Tango y su subtotal.
+        porsec = {}
+        for (seccion, rubro, _clave), d in agregado.items():
             if abs(d["valor"]) < 0.005:
                 continue
-            s = out.setdefault(seccion, {"detalle": [], "total": 0.0})
-            s["detalle"].append((d["codigo"], d["nombre"], round(d["valor"], 2), False))
-            s["total"] += d["valor"]
-        for seccion in out:
-            out[seccion]["detalle"].sort(key=lambda x: x[0])
-            out[seccion]["total"] = round(out[seccion]["total"], 2)
+            porsec.setdefault(seccion, {}).setdefault(rubro, []).append(
+                (d["codigo"], d["nombre"], round(d["valor"], 2)))
+        out = {}
+        for seccion, rubros in porsec.items():
+            lista, total = [], 0.0
+            for rubro in sorted(rubros):
+                detalle = sorted(rubros[rubro], key=lambda x: x[0])
+                rtot = round(sum(x[2] for x in detalle), 2)
+                lista.append({"code": rubro[1], "name": rubro[2],
+                              "detalle": detalle, "total": rtot})
+                total += rtot
+            out[seccion] = {"rubros": lista, "total": round(total, 2)}
         return out
 
     def _hoja_balance_odoo(self, wb):
-        datos = self._datos_estados()
-        data = self._odoo_detallado_por_seccion(datos, "actual")
+        """Balance de Odoo al cierre en layout impositivo, abierto por
+        SECCIÓN → RUBRO RT 59 (con subtotal) → códigos de cuenta de Tango."""
+        from openpyxl.styles import Alignment
+        st = self._estilos_impositivo()
+        num = "#,##0.00"
+        data = self._odoo_detallado_por_seccion(self._datos_estados(), "actual")
         actual = self.date_to.strftime("%d/%m/%Y")
-        ws = self._hoja_balance_formato(
-            wb, "Balance Odoo (impositivo)",
-            f"{self.company_id.name} — Balance al {actual} (formato impositivo, datos de Odoo)",
-            "Saldos de Odoo al cierre, en el layout del balance impositivo. "
-            "Patrimonio neto sin el resultado; resultado del ejercicio aparte.",
-            data)
+        ws = wb.create_sheet("Balance Odoo (impositivo)", 0)
+        ws.append([f"{self.company_id.name} — Balance al {actual} (formato impositivo, datos de Odoo)"])
+        ws.cell(ws.max_row, 1).font = st["big"]
+        ws.append(["Saldos de Odoo al cierre, abiertos por rubro de la RT 59. "
+                   "Patrimonio neto sin el resultado; resultado del ejercicio aparte."])
+        ws.append([])
+        ws.append(["Código", "Concepto", "Importe"])
+        for cell in ws[ws.max_row]:
+            cell.font = st["bold"]
+            cell.alignment = Alignment(horizontal="center")
+
+        def fila(codigo, concepto, importe, kind):
+            sang = {"rubro": "  ", "det": "      ", "rsub": "    "}.get(kind, "")
+            ws.append([codigo or "", f"{sang}{concepto}", importe])
+            r = ws.max_row
+            if importe is not None:
+                ws.cell(r, 3).number_format = num
+            font = {"sec": st["sec"], "rubro": st["bold"], "det": st["det"],
+                    "rsub": st["det"]}.get(kind)
+            if font:
+                for cell in ws[r]:
+                    cell.font = font
+            if kind in ("total", "sectot"):
+                for cell in ws[r]:
+                    cell.border = st["top"]
+                    cell.font = st["bold"]
+
+        secciones = list(SECCIONES_ESP) + [
+            ("resultado", "RESULTADO DEL EJERCICIO (ganancias y pérdidas)")]
+        tot = {"activo": 0.0, "pasivo": 0.0, "pn": 0.0, "resultado": 0.0}
+        for seccion, titulo in secciones:
+            d = data.get(seccion)
+            if not d:
+                continue
+            fila(None, titulo, None, "sec")
+            for rubro in d["rubros"]:
+                etiqueta = f"{rubro['code']} {rubro['name']}".strip()
+                fila(rubro["code"] or None, etiqueta, None, "rubro")
+                for cod, nom, imp in rubro["detalle"]:
+                    fila(cod, nom, imp, "det")
+                fila(None, f"Subtotal {etiqueta}", rubro["total"], "rsub")
+            fila(None, f"Total {titulo.lower()}", d["total"], "sectot")
+            destino = ("activo" if seccion in ACTIVO
+                       else "pasivo" if seccion in PASIVO
+                       else "resultado" if seccion == "resultado" else "pn")
+            tot[destino] += d["total"]
+        ws.append([])
+        fila(None, "TOTAL ACTIVO", tot["activo"], "total")
+        fila(None, "TOTAL PASIVO", tot["pasivo"], "total")
+        fila(None, "TOTAL PATRIMONIO NETO", tot["pn"], "total")
+        if abs(tot["resultado"]) >= 0.005:
+            fila(None, "TOTAL RESULTADO DEL EJERCICIO", tot["resultado"], "total")
+        fila(None, "TOTAL PASIVO + PN + RESULTADO",
+             tot["pasivo"] + tot["pn"] + tot["resultado"], "total")
+        ws.column_dimensions["A"].width = 16
+        ws.column_dimensions["B"].width = 56
+        ws.column_dimensions["C"].width = 22
+        ws.freeze_panes = "A5"
         self._footer_exclusion(ws)
 
     def _hoja_balance_formato(self, wb, sheet_name, titulo, subtitulo, datos_sec):
