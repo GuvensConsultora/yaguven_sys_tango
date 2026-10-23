@@ -16,6 +16,14 @@ from odoo import fields, models
 
 from .estados_contables import ACTIVO, PASIVO, SECCIONES_ESP
 
+# Segregación del estado de resultados en el balance impositivo (códigos ER de la
+# RT 59 / CENCyA 27). Operativos incluye ER.09/ER.10 (otros ingresos/egresos del
+# giro); ER.11 (impuesto a las ganancias) es línea propia al final; el resto
+# (ER.06 valor razonable, ER.07 desvalorización, ER.08 financieros y por tenencia,
+# ER.12 operaciones discontinuadas) es no operativo. Decisión de Horacio 2026-10-22.
+ER_OPERATIVO = {"ER.01", "ER.02", "ER.03", "ER.04", "ER.05", "ER.09", "ER.10"}
+ER_IMPUESTO = {"ER.11"}
+
 
 class SysTangoWizardImpositivo(models.TransientModel):
     _inherit = "yaguven.sys.tango.wizard"
@@ -276,22 +284,35 @@ class SysTangoWizardImpositivo(models.TransientModel):
             cell.font = st["bold"]
             cell.alignment = Alignment(horizontal="center")
 
-        def fila(codigo, concepto, importe, kind):
-            sang = {"rubro": "  ", "subrubro": "    ", "det": "        ",
-                    "rsub": "  "}.get(kind, "")
+        def fila(codigo, concepto, importe, kind, nivel=0):
+            base = {"rubro": "  ", "subrubro": "    ", "det": "        ",
+                    "rsub": "  ", "grupo": "  ", "grupotot": "  "}.get(kind, "")
+            sang = base + "  " * nivel
             ws.append([codigo or "", f"{sang}{concepto}", importe])
             r = ws.max_row
             if importe is not None:
                 ws.cell(r, 3).number_format = num
             font = {"sec": st["sec"], "rubro": st["bold"], "subrubro": st["bold"],
-                    "det": st["det"], "rsub": st["det"]}.get(kind)
+                    "det": st["det"], "rsub": st["det"], "grupo": st["bold"]}.get(kind)
             if font:
                 for cell in ws[r]:
                     cell.font = font
-            if kind in ("total", "sectot"):
+            if kind in ("total", "sectot", "grupotot"):
                 for cell in ws[r]:
                     cell.border = st["top"]
                     cell.font = st["bold"]
+
+        def render_rubro(rubro, nivel=0):
+            etiqueta = f"{rubro['code']} {rubro['name']}".strip()
+            fila(rubro["code"] or None, etiqueta, rubro["total"], "rubro", nivel)
+            if rubro.get("subrubros"):
+                for sub in rubro["subrubros"]:
+                    fila(None, sub["name"], sub["total"], "subrubro", nivel)
+                    for cod, nom, imp in sub["detalle"]:
+                        fila(cod, nom, imp, "det", nivel)
+            else:
+                for cod, nom, imp in rubro["detalle"]:
+                    fila(cod, nom, imp, "det", nivel)
 
         secciones = list(SECCIONES_ESP) + [
             ("resultado", "RESULTADO DEL EJERCICIO (ganancias y pérdidas)")]
@@ -300,21 +321,33 @@ class SysTangoWizardImpositivo(models.TransientModel):
             d = data.get(seccion)
             if not d:
                 continue
-            # el total de cada grupo va en SU encabezado, no al pie:
-            # sección → en el título de sección, rubro → en el renglón del rubro,
-            # sub-rubro → en el renglón del sub-rubro.
+            # el total de cada grupo va en SU encabezado, no al pie.
             fila(None, titulo, d["total"], "sec")
-            for rubro in d["rubros"]:
-                etiqueta = f"{rubro['code']} {rubro['name']}".strip()
-                fila(rubro["code"] or None, etiqueta, rubro["total"], "rubro")
-                if rubro.get("subrubros"):
-                    for sub in rubro["subrubros"]:
-                        fila(None, sub["name"], sub["total"], "subrubro")
-                        for cod, nom, imp in sub["detalle"]:
-                            fila(cod, nom, imp, "det")
-                else:
-                    for cod, nom, imp in rubro["detalle"]:
-                        fila(cod, nom, imp, "det")
+            if seccion == "resultado":
+                # segregación operativo / no operativo / impuesto (CENCyA 27)
+                op = [r for r in d["rubros"] if r["code"] in ER_OPERATIVO]
+                imp = [r for r in d["rubros"] if r["code"] in ER_IMPUESTO]
+                noop = [r for r in d["rubros"]
+                        if r["code"] not in ER_OPERATIVO and r["code"] not in ER_IMPUESTO]
+                op_tot = round(sum(r["total"] for r in op), 2)
+                noop_tot = round(sum(r["total"] for r in noop), 2)
+                fila(None, "Resultados operativos", op_tot, "grupo")
+                for r in op:
+                    render_rubro(r, nivel=1)
+                if noop:
+                    fila(None, "Resultados no operativos", noop_tot, "grupo")
+                    for r in noop:
+                        render_rubro(r, nivel=1)
+                fila(None, "Resultado antes de impuestos",
+                     round(op_tot + noop_tot, 2), "grupotot")
+                if imp:
+                    fila(None, "Impuesto a las ganancias",
+                         round(sum(r["total"] for r in imp), 2), "grupo")
+                    for r in imp:
+                        render_rubro(r, nivel=1)
+            else:
+                for rubro in d["rubros"]:
+                    render_rubro(rubro)
             destino = ("activo" if seccion in ACTIVO
                        else "pasivo" if seccion in PASIVO
                        else "resultado" if seccion == "resultado" else "pn")
