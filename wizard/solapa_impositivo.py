@@ -300,12 +300,14 @@ class SysTangoWizardImpositivo(models.TransientModel):
             d = data.get(seccion)
             if not d:
                 continue
-            fila(None, titulo, None, "sec")
+            # el total de cada grupo va en SU encabezado, no al pie:
+            # sección → en el título de sección, rubro → en el renglón del rubro,
+            # sub-rubro → en el renglón del sub-rubro.
+            fila(None, titulo, d["total"], "sec")
             for rubro in d["rubros"]:
                 etiqueta = f"{rubro['code']} {rubro['name']}".strip()
-                fila(rubro["code"] or None, etiqueta, None, "rubro")
+                fila(rubro["code"] or None, etiqueta, rubro["total"], "rubro")
                 if rubro.get("subrubros"):
-                    # el total (valor actual) va ARRIBA, en el renglón del sub-rubro
                     for sub in rubro["subrubros"]:
                         fila(None, sub["name"], sub["total"], "subrubro")
                         for cod, nom, imp in sub["detalle"]:
@@ -313,8 +315,6 @@ class SysTangoWizardImpositivo(models.TransientModel):
                 else:
                     for cod, nom, imp in rubro["detalle"]:
                         fila(cod, nom, imp, "det")
-                fila(None, f"Subtotal {etiqueta}", rubro["total"], "rsub")
-            fila(None, f"Total {titulo.lower()}", d["total"], "sectot")
             destino = ("activo" if seccion in ACTIVO
                        else "pasivo" if seccion in PASIVO
                        else "resultado" if seccion == "resultado" else "pn")
