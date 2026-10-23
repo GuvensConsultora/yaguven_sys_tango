@@ -172,11 +172,11 @@ class SysTangoWizardImpositivo(models.TransientModel):
         # La sección y el RUBRO se deciden con el saldo TOTAL de la cuenta
         # (estable): si se usara el saldo por diario, una cuenta con condición por
         # signo se partiría entre activo y pasivo e inflaría los totales.
-        seccion_de, rubro_de = {}, {}
+        seccion_de, rubro_de, subrubro_de = {}, {}, {}
         for account, saldo in self._saldos_por_cuenta(hasta, exclusion["move_ids"]).items():
             if abs(saldo) < 0.005:
                 continue
-            rubro, _r, _m = self._rubro_de(account, saldo, por_cuenta, por_grupo)
+            rubro, _r, mapeo = self._rubro_de(account, saldo, por_cuenta, por_grupo)
             if rubro:
                 seccion_de[account.id] = rubro.section
                 rubro_de[account.id] = (rubro.sequence, rubro.code or "", rubro.name)
@@ -184,6 +184,7 @@ class SysTangoWizardImpositivo(models.TransientModel):
                 seccion_de[account.id] = self._SECCION_POR_NATURALEZA.get(
                     account.internal_group, "activo_corriente")
                 rubro_de[account.id] = (9999, "", "(sin rubro asignado)")
+            subrubro_de[account.id] = (mapeo.subrubro or "") if mapeo else ""
 
         # mapeo Odoo -> Tango (con reparto por diario cuando existe)
         tango_of, split = {}, set()
@@ -211,6 +212,7 @@ class SysTangoWizardImpositivo(models.TransientModel):
             seccion = seccion_de.get(account.id) or self._SECCION_POR_NATURALEZA.get(
                 account.internal_group, "activo_corriente")
             rubro = rubro_de.get(account.id) or (9999, "", "(sin rubro asignado)")
+            subrubro = subrubro_de.get(account.id, "")
             jid = journal.id if (account.id in split and journal) else 0
             tango = tango_of.get((account.id, jid)) or tango_of.get((account.id, 0))
             if tango:
@@ -218,26 +220,39 @@ class SysTangoWizardImpositivo(models.TransientModel):
             else:
                 codigo, nombre, clave = (account.code or ""), account.name, ("o", account.id)
             valor = saldo if seccion in ACTIVO else -saldo
-            d = agregado.setdefault((seccion, rubro, clave),
+            d = agregado.setdefault((seccion, rubro, subrubro, clave),
                                     {"codigo": codigo, "nombre": nombre, "valor": 0.0})
             d["valor"] += valor
 
         # salida: cada sección con sus rubros (ordenados por código), y cada rubro
         # con su detalle de códigos Tango y su subtotal.
         porsec = {}
-        for (seccion, rubro, _clave), d in agregado.items():
+        for (seccion, rubro, subrubro, _clave), d in agregado.items():
             if abs(d["valor"]) < 0.005:
                 continue
-            porsec.setdefault(seccion, {}).setdefault(rubro, []).append(
-                (d["codigo"], d["nombre"], round(d["valor"], 2)))
+            (porsec.setdefault(seccion, {}).setdefault(rubro, {})
+                   .setdefault(subrubro, []).append(
+                       (d["codigo"], d["nombre"], round(d["valor"], 2))))
         out = {}
         for seccion, rubros in porsec.items():
             lista, total = [], 0.0
             for rubro in sorted(rubros):
-                detalle = sorted(rubros[rubro], key=lambda x: x[0])
-                rtot = round(sum(x[2] for x in detalle), 2)
-                lista.append({"code": rubro[1], "name": rubro[2],
-                              "detalle": detalle, "total": rtot})
+                subs = rubros[rubro]
+                if any(s for s in subs):  # el rubro tiene al menos un sub-rubro
+                    subrubros = []
+                    for sub in sorted(subs):
+                        det = sorted(subs[sub], key=lambda x: x[0])
+                        subrubros.append({"name": sub or "(sin sub-rubro)",
+                                          "detalle": det,
+                                          "total": round(sum(x[2] for x in det), 2)})
+                    rtot = round(sum(s["total"] for s in subrubros), 2)
+                    lista.append({"code": rubro[1], "name": rubro[2],
+                                  "subrubros": subrubros, "total": rtot})
+                else:
+                    det = sorted(subs.get("", []), key=lambda x: x[0])
+                    rtot = round(sum(x[2] for x in det), 2)
+                    lista.append({"code": rubro[1], "name": rubro[2],
+                                  "detalle": det, "total": rtot})
                 total += rtot
             out[seccion] = {"rubros": lista, "total": round(total, 2)}
         return out
@@ -262,13 +277,14 @@ class SysTangoWizardImpositivo(models.TransientModel):
             cell.alignment = Alignment(horizontal="center")
 
         def fila(codigo, concepto, importe, kind):
-            sang = {"rubro": "  ", "det": "      ", "rsub": "    "}.get(kind, "")
+            sang = {"rubro": "  ", "subrubro": "    ", "det": "        ",
+                    "rsub": "  "}.get(kind, "")
             ws.append([codigo or "", f"{sang}{concepto}", importe])
             r = ws.max_row
             if importe is not None:
                 ws.cell(r, 3).number_format = num
-            font = {"sec": st["sec"], "rubro": st["bold"], "det": st["det"],
-                    "rsub": st["det"]}.get(kind)
+            font = {"sec": st["sec"], "rubro": st["bold"], "subrubro": st["bold"],
+                    "det": st["det"], "rsub": st["det"]}.get(kind)
             if font:
                 for cell in ws[r]:
                     cell.font = font
@@ -288,8 +304,15 @@ class SysTangoWizardImpositivo(models.TransientModel):
             for rubro in d["rubros"]:
                 etiqueta = f"{rubro['code']} {rubro['name']}".strip()
                 fila(rubro["code"] or None, etiqueta, None, "rubro")
-                for cod, nom, imp in rubro["detalle"]:
-                    fila(cod, nom, imp, "det")
+                if rubro.get("subrubros"):
+                    # el total (valor actual) va ARRIBA, en el renglón del sub-rubro
+                    for sub in rubro["subrubros"]:
+                        fila(None, sub["name"], sub["total"], "subrubro")
+                        for cod, nom, imp in sub["detalle"]:
+                            fila(cod, nom, imp, "det")
+                else:
+                    for cod, nom, imp in rubro["detalle"]:
+                        fila(cod, nom, imp, "det")
                 fila(None, f"Subtotal {etiqueta}", rubro["total"], "rsub")
             fila(None, f"Total {titulo.lower()}", d["total"], "sectot")
             destino = ("activo" if seccion in ACTIVO

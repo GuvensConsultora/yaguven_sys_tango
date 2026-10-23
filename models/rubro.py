@@ -222,6 +222,12 @@ class RubroMapping(models.Model):
         "caso de la amortización acumulada o de las mercaderías pendientes de "
         "facturar.",
     )
+    subrubro = fields.Char(
+        string="Sub-rubro",
+        help="Agrupa la cuenta dentro del rubro en un sub-rubro (ej. cada clase de "
+        "bien de uso con su amortización), para exponer el valor actual neto. Las "
+        "cuentas con el mismo texto de sub-rubro se muestran juntas.",
+    )
     note = fields.Char(
         string="Fundamento",
         help="Por qué esta cuenta se expone en este rubro. Queda a la vista en el "
