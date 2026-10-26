@@ -47,6 +47,21 @@ class SysTangoWizardDetalle(models.TransientModel):
                 cuentas |= account
         return cuentas
 
+    def _cuentas_recpam(self):
+        """La(s) cuenta(s) de RECPAM de la compañía (resultado por exposición a los
+        cambios en el poder adquisitivo de la moneda).
+
+        Se busca por el código del plan Tango con fallback por nombre, para no atar
+        el reporte a un id y que resuelva igual en otra compañía.
+        """
+        self.ensure_one()
+        return self.env["account.account"].with_company(self.company_id).search([
+            ("company_ids", "in", self.company_id.ids),
+            "|",
+            ("code", "=", "5.6.1.01.070"),
+            ("name", "ilike", "R.E.C.P.A.M"),
+        ])
+
     # -------------------------------------------------------------- lectura
 
     def _composicion_por_partner(self, cuentas, excluidos=()):
@@ -333,4 +348,7 @@ class SysTangoWizardDetalle(models.TransientModel):
             wb, "Mayor de mercaderías", self._cuentas_de_rubros(RUBROS_MERCADERIAS, saldos),
             True, excluidos
         )
+        recpam = self._cuentas_recpam()
+        if recpam:
+            self._hoja_mayor(wb, "Mayor del RECPAM", recpam, True, excluidos)
         return wb
