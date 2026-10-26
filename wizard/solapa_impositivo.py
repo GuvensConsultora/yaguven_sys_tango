@@ -170,8 +170,12 @@ class SysTangoWizardImpositivo(models.TransientModel):
         el resultado, su saldo acreedor. El patrimonio neto queda sin el resultado
         del ejercicio, que arma su propia sección.
 
-        Devuelve {seccion: {"rubros": [{"code","name","detalle","total"}], "total"}}
-        con los rubros ordenados por su código."""
+        Cada importe sale dos veces: ajustado (todo lo posteado) e histórico (sin los
+        asientos del ajuste por inflación, que son los que tocan la cuenta RECPAM).
+
+        Devuelve {seccion: {"rubros": [{"code","name","detalle","total","total_hist"}],
+        "total", "total_hist"}} con los rubros ordenados por su código; cada renglón
+        del detalle es (código, nombre, ajustado, histórico)."""
         self.ensure_one()
         hasta = self.date_to if columna == "actual" else fields.Date.subtract(self.date_from, days=1)
         exclusion = self._excluded_moves()
@@ -208,42 +212,56 @@ class SysTangoWizardImpositivo(models.TransientModel):
             dominio.append(("move_id", "not in", list(exclusion["move_ids"])))
         AML = self.env["account.move.line"].with_company(self.company_id)
 
-        # agregado por (sección, rubro, código Tango)
+        # Asientos del ajuste por inflación: todo asiento que toca la cuenta RECPAM.
+        # Sin ellos queda el saldo histórico (las reversas se cancelan entre sí).
+        recpam = self._cuentas_recpam()
+        ajuste_ids = (AML.search(dominio + [("account_id", "in", recpam.ids)]).move_id.ids
+                      if recpam else [])
+        dominio_hist = dominio + ([("move_id", "not in", ajuste_ids)] if ajuste_ids else [])
+
+        # agregado por (sección, rubro, código Tango); la clasificación sale del saldo
+        # ajustado y las dos columnas se acumulan bajo esa misma clave.
         agregado = {}
-        for account, journal, debit, credit in AML._read_group(
-                dominio, ["account_id", "journal_id"], ["debit:sum", "credit:sum"]):
-            if not account:
-                continue
-            saldo = (debit or 0.0) - (credit or 0.0)
-            if abs(saldo) < 0.005:
-                continue
-            seccion = seccion_de.get(account.id) or self._SECCION_POR_NATURALEZA.get(
-                account.internal_group, "activo_corriente")
-            rubro = rubro_de.get(account.id) or (9999, "", "(sin rubro asignado)")
-            subrubro = subrubro_de.get(account.id, "")
-            jid = journal.id if (account.id in split and journal) else 0
-            tango = tango_of.get((account.id, jid)) or tango_of.get((account.id, 0))
-            if tango:
-                codigo, nombre, clave = tango.code, tango.name, ("t", tango.id)
-            else:
-                codigo, nombre, clave = (account.code or ""), account.name, ("o", account.id)
-            valor = saldo if seccion in ACTIVO else -saldo
-            d = agregado.setdefault((seccion, rubro, subrubro, clave),
-                                    {"codigo": codigo, "nombre": nombre, "valor": 0.0})
-            d["valor"] += valor
+
+        def acumular(dom, campo):
+            for account, journal, debit, credit in AML._read_group(
+                    dom, ["account_id", "journal_id"], ["debit:sum", "credit:sum"]):
+                if not account:
+                    continue
+                saldo = (debit or 0.0) - (credit or 0.0)
+                if abs(saldo) < 0.005:
+                    continue
+                seccion = seccion_de.get(account.id) or self._SECCION_POR_NATURALEZA.get(
+                    account.internal_group, "activo_corriente")
+                rubro = rubro_de.get(account.id) or (9999, "", "(sin rubro asignado)")
+                subrubro = subrubro_de.get(account.id, "")
+                jid = journal.id if (account.id in split and journal) else 0
+                tango = tango_of.get((account.id, jid)) or tango_of.get((account.id, 0))
+                if tango:
+                    codigo, nombre, clave = tango.code, tango.name, ("t", tango.id)
+                else:
+                    codigo, nombre, clave = (account.code or ""), account.name, ("o", account.id)
+                valor = saldo if seccion in ACTIVO else -saldo
+                d = agregado.setdefault((seccion, rubro, subrubro, clave),
+                                        {"codigo": codigo, "nombre": nombre,
+                                         "valor": 0.0, "hist": 0.0})
+                d[campo] += valor
+
+        acumular(dominio, "valor")
+        acumular(dominio_hist, "hist")
 
         # salida: cada sección con sus rubros (ordenados por código), y cada rubro
-        # con su detalle de códigos Tango y su subtotal.
+        # con su detalle de códigos Tango y sus subtotales ajustado e histórico.
         porsec = {}
         for (seccion, rubro, subrubro, _clave), d in agregado.items():
-            if abs(d["valor"]) < 0.005:
+            if abs(d["valor"]) < 0.005 and abs(d["hist"]) < 0.005:
                 continue
             (porsec.setdefault(seccion, {}).setdefault(rubro, {})
                    .setdefault(subrubro, []).append(
-                       (d["codigo"], d["nombre"], round(d["valor"], 2))))
+                       (d["codigo"], d["nombre"], round(d["valor"], 2), round(d["hist"], 2))))
         out = {}
         for seccion, rubros in porsec.items():
-            lista, total = [], 0.0
+            lista, total, total_hist = [], 0.0, 0.0
             for rubro in sorted(rubros):
                 subs = rubros[rubro]
                 if any(s for s in subs):  # el rubro tiene al menos un sub-rubro
@@ -252,17 +270,22 @@ class SysTangoWizardImpositivo(models.TransientModel):
                         det = sorted(subs[sub], key=lambda x: x[0])
                         subrubros.append({"name": sub or "(sin sub-rubro)",
                                           "detalle": det,
-                                          "total": round(sum(x[2] for x in det), 2)})
+                                          "total": round(sum(x[2] for x in det), 2),
+                                          "total_hist": round(sum(x[3] for x in det), 2)})
                     rtot = round(sum(s["total"] for s in subrubros), 2)
+                    rhist = round(sum(s["total_hist"] for s in subrubros), 2)
                     lista.append({"code": rubro[1], "name": rubro[2],
-                                  "subrubros": subrubros, "total": rtot})
+                                  "subrubros": subrubros, "total": rtot, "total_hist": rhist})
                 else:
                     det = sorted(subs.get("", []), key=lambda x: x[0])
                     rtot = round(sum(x[2] for x in det), 2)
+                    rhist = round(sum(x[3] for x in det), 2)
                     lista.append({"code": rubro[1], "name": rubro[2],
-                                  "detalle": det, "total": rtot})
+                                  "detalle": det, "total": rtot, "total_hist": rhist})
                 total += rtot
-            out[seccion] = {"rubros": lista, "total": round(total, 2)}
+                total_hist += rhist
+            out[seccion] = {"rubros": lista, "total": round(total, 2),
+                            "total_hist": round(total_hist, 2)}
         return out
 
     def _hoja_balance_odoo(self, wb):
@@ -278,20 +301,28 @@ class SysTangoWizardImpositivo(models.TransientModel):
         ws.cell(ws.max_row, 1).font = st["big"]
         ws.append(["Saldos de Odoo al cierre, abiertos por rubro de la RT 59. "
                    "Patrimonio neto sin el resultado; resultado del ejercicio aparte."])
+        ws.append(["Saldo histórico: sin los asientos del ajuste por inflación (los que tocan "
+                   "RECPAM). Saldo ajustado: con ellos."])
         ws.append([])
-        ws.append(["Código", "Concepto", "Importe"])
+        ws.append(["Código", "Concepto", "Saldo histórico", "Ajuste por inflación",
+                   "Saldo ajustado"])
         for cell in ws[ws.max_row]:
             cell.font = st["bold"]
-            cell.alignment = Alignment(horizontal="center")
+            cell.alignment = Alignment(horizontal="center", wrap_text=True)
 
-        def fila(codigo, concepto, importe, kind, nivel=0):
+        def fila(codigo, concepto, importe, kind, nivel=0, hist=None):
             base = {"rubro": "  ", "subrubro": "    ", "det": "        ",
                     "rsub": "  ", "grupo": "  ", "grupotot": "  "}.get(kind, "")
             sang = base + "  " * nivel
-            ws.append([codigo or "", f"{sang}{concepto}", importe])
+            if importe is None:
+                ws.append([codigo or "", f"{sang}{concepto}"])
+            else:
+                h = importe if hist is None else hist
+                ws.append([codigo or "", f"{sang}{concepto}", h, round(importe - h, 2), importe])
             r = ws.max_row
             if importe is not None:
-                ws.cell(r, 3).number_format = num
+                for col in (3, 4, 5):
+                    ws.cell(r, col).number_format = num
             font = {"sec": st["sec"], "rubro": st["bold"], "subrubro": st["bold"],
                     "det": st["det"], "rsub": st["det"], "grupo": st["bold"]}.get(kind)
             if font:
@@ -304,45 +335,51 @@ class SysTangoWizardImpositivo(models.TransientModel):
 
         def render_rubro(rubro, nivel=0):
             etiqueta = f"{rubro['code']} {rubro['name']}".strip()
-            fila(rubro["code"] or None, etiqueta, rubro["total"], "rubro", nivel)
+            fila(rubro["code"] or None, etiqueta, rubro["total"], "rubro", nivel,
+                 rubro["total_hist"])
             if rubro.get("subrubros"):
                 for sub in rubro["subrubros"]:
-                    fila(None, sub["name"], sub["total"], "subrubro", nivel)
-                    for cod, nom, imp in sub["detalle"]:
-                        fila(cod, nom, imp, "det", nivel)
+                    fila(None, sub["name"], sub["total"], "subrubro", nivel, sub["total_hist"])
+                    for cod, nom, imp, hist in sub["detalle"]:
+                        fila(cod, nom, imp, "det", nivel, hist)
             else:
-                for cod, nom, imp in rubro["detalle"]:
-                    fila(cod, nom, imp, "det", nivel)
+                for cod, nom, imp, hist in rubro["detalle"]:
+                    fila(cod, nom, imp, "det", nivel, hist)
+
+        def suma(rubros, campo):
+            return round(sum(r[campo] for r in rubros), 2)
 
         secciones = list(SECCIONES_ESP) + [
             ("resultado", "RESULTADO DEL EJERCICIO (ganancias y pérdidas)")]
-        tot = {"activo": 0.0, "pasivo": 0.0, "pn": 0.0, "resultado": 0.0}
+        # [ajustado, histórico] por destino
+        tot = {k: [0.0, 0.0] for k in ("activo", "pasivo", "pn", "resultado")}
         for seccion, titulo in secciones:
             d = data.get(seccion)
             if not d:
                 continue
             # el total de cada grupo va en SU encabezado, no al pie.
-            fila(None, titulo, d["total"], "sec")
+            fila(None, titulo, d["total"], "sec", 0, d["total_hist"])
             if seccion == "resultado":
                 # segregación operativo / no operativo / impuesto (CENCyA 27)
                 op = [r for r in d["rubros"] if r["code"] in ER_OPERATIVO]
                 imp = [r for r in d["rubros"] if r["code"] in ER_IMPUESTO]
                 noop = [r for r in d["rubros"]
                         if r["code"] not in ER_OPERATIVO and r["code"] not in ER_IMPUESTO]
-                op_tot = round(sum(r["total"] for r in op), 2)
-                noop_tot = round(sum(r["total"] for r in noop), 2)
-                fila(None, "Resultados operativos", op_tot, "grupo")
+                fila(None, "Resultados operativos", suma(op, "total"), "grupo", 0,
+                     suma(op, "total_hist"))
                 for r in op:
                     render_rubro(r, nivel=1)
                 if noop:
-                    fila(None, "Resultados no operativos", noop_tot, "grupo")
+                    fila(None, "Resultados no operativos", suma(noop, "total"), "grupo", 0,
+                         suma(noop, "total_hist"))
                     for r in noop:
                         render_rubro(r, nivel=1)
                 fila(None, "Resultado antes de impuestos",
-                     round(op_tot + noop_tot, 2), "grupotot")
+                     round(suma(op, "total") + suma(noop, "total"), 2), "grupotot", 0,
+                     round(suma(op, "total_hist") + suma(noop, "total_hist"), 2))
                 if imp:
-                    fila(None, "Impuesto a las ganancias",
-                         round(sum(r["total"] for r in imp), 2), "grupo")
+                    fila(None, "Impuesto a las ganancias", suma(imp, "total"), "grupo", 0,
+                         suma(imp, "total_hist"))
                     for r in imp:
                         render_rubro(r, nivel=1)
             else:
@@ -351,19 +388,23 @@ class SysTangoWizardImpositivo(models.TransientModel):
             destino = ("activo" if seccion in ACTIVO
                        else "pasivo" if seccion in PASIVO
                        else "resultado" if seccion == "resultado" else "pn")
-            tot[destino] += d["total"]
+            tot[destino][0] += d["total"]
+            tot[destino][1] += d["total_hist"]
         ws.append([])
-        fila(None, "TOTAL ACTIVO", tot["activo"], "total")
-        fila(None, "TOTAL PASIVO", tot["pasivo"], "total")
-        fila(None, "TOTAL PATRIMONIO NETO", tot["pn"], "total")
-        if abs(tot["resultado"]) >= 0.005:
-            fila(None, "TOTAL RESULTADO DEL EJERCICIO", tot["resultado"], "total")
+        fila(None, "TOTAL ACTIVO", tot["activo"][0], "total", 0, tot["activo"][1])
+        fila(None, "TOTAL PASIVO", tot["pasivo"][0], "total", 0, tot["pasivo"][1])
+        fila(None, "TOTAL PATRIMONIO NETO", tot["pn"][0], "total", 0, tot["pn"][1])
+        if abs(tot["resultado"][0]) >= 0.005 or abs(tot["resultado"][1]) >= 0.005:
+            fila(None, "TOTAL RESULTADO DEL EJERCICIO", tot["resultado"][0], "total", 0,
+                 tot["resultado"][1])
         fila(None, "TOTAL PASIVO + PN + RESULTADO",
-             tot["pasivo"] + tot["pn"] + tot["resultado"], "total")
+             tot["pasivo"][0] + tot["pn"][0] + tot["resultado"][0], "total", 0,
+             tot["pasivo"][1] + tot["pn"][1] + tot["resultado"][1])
         ws.column_dimensions["A"].width = 16
         ws.column_dimensions["B"].width = 56
-        ws.column_dimensions["C"].width = 22
-        ws.freeze_panes = "A5"
+        for letra in ("C", "D", "E"):
+            ws.column_dimensions[letra].width = 20
+        ws.freeze_panes = "A6"
         self._footer_exclusion(ws)
 
     def _hoja_balance_formato(self, wb, sheet_name, titulo, subtitulo, datos_sec):
